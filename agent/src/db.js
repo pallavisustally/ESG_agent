@@ -23,7 +23,13 @@ export async function getDb() {
   if (process.env.VERCEL) {
     console.log("Initializing database using sql.js for Vercel...");
     const initSqlJs = (await import('sql.js')).default;
-    const SQL = await initSqlJs();
+    const path = (await import('path')).default;
+    const wasmPath = path.resolve(process.cwd(), 'node_modules/sql.js/dist/sql-wasm.wasm');
+    
+    console.log(`Loading sql.js with wasmPath: ${wasmPath}`);
+    const SQL = await initSqlJs({
+      locateFile: () => wasmPath
+    });
     
     let fileBuffer;
     if (fs.existsSync(DB_PATH)) {
