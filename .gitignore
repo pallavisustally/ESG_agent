@@ -29,6 +29,9 @@ data/xbrl/
 data/chats.json
 data/citation_tests/
 data/model_comparisons/
+data/pdf_cache/
+data/model_evaluation_responses_*.json
+data/*results.json
 data/*report*.json
 data/*report*.md
 data/*summary*.md
