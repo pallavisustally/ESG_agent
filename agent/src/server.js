@@ -3,14 +3,41 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
-import { getAvailableReports, deleteReport } from './db.js';
-import { runAgent } from './agent.js';
-import { getDb } from './db.js';
 import { AGENT_ROOT, resolveFromProject, resolveXbrlDir } from './paths.js';
-import { warmOllamaModel } from './ollama-client.js';
 
 // Load environment variables
 dotenv.config();
+
+let getAvailableReports, deleteReport, getDb, runAgent, warmOllamaModel;
+let startupError = null;
+
+async function loadModules() {
+  try {
+    const dbModule = await import('./db.js');
+    getAvailableReports = dbModule.getAvailableReports;
+    deleteReport = dbModule.deleteReport;
+    getDb = dbModule.getDb;
+
+    const agentModule = await import('./agent.js');
+    runAgent = agentModule.runAgent;
+
+    const ollamaModule = await import('./ollama-client.js');
+    warmOllamaModel = ollamaModule.warmOllamaModel;
+
+    // Connect to database on startup
+    await getDb();
+    console.log('Database connected.');
+    if (warmOllamaModel) {
+      warmOllamaModel().catch(() => {});
+    }
+  } catch (err) {
+    console.error('CRITICAL STARTUP ERROR:', err);
+    startupError = err;
+  }
+}
+
+// Start loading immediately
+const loadPromise = loadModules();
 
 // BRSR/ESG XBRL directory (data/xbrl/2025/SYMBOL/, etc.)
 const XBRL_DIR = resolveXbrlDir();
@@ -45,6 +72,25 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use(express.static(path.join(AGENT_ROOT, 'src', 'public')));
+
+// Diagnostic check middleware
+app.use(async (req, res, next) => {
+  await loadPromise;
+  if (startupError) {
+    return res.status(500).json({
+      success: false,
+      error: "Startup Initialization Failed",
+      message: startupError.message,
+      stack: startupError.stack,
+      env: {
+        NODE_ENV: process.env.NODE_ENV,
+        VERCEL: process.env.VERCEL,
+        VERCEL_ENV: process.env.VERCEL_ENV
+      }
+    });
+  }
+  next();
+});
 
 // Import XML processor dynamically
 let processXmlFile;
@@ -217,21 +263,25 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-// Start Server
-app.listen(PORT, async () => {
-  const provider = process.env.OPENAI_API_KEY?.trim()
-    ? 'OpenAI'
-    : process.env.OPENROUTER_API_KEY?.trim()
-      ? 'OpenRouter'
-      : 'Ollama';
-  console.log(`Server is running at http://localhost:${PORT} (LLM: ${provider})`);
-  try {
-    await getDb();
-    console.log('Database connected.');
-    warmOllamaModel().catch(() => {});
-  } catch (err) {
-    console.error('Database connection failed:', err);
-  }
-});
+// Start Server (only if not running in Vercel Serverless environment)
+if (!process.env.VERCEL) {
+  app.listen(PORT, async () => {
+    const provider = process.env.OPENAI_API_KEY?.trim()
+      ? 'OpenAI'
+      : process.env.OPENROUTER_API_KEY?.trim()
+        ? 'OpenRouter'
+        : 'Ollama';
+    console.log(`Server is running at http://localhost:${PORT} (LLM: ${provider})`);
+    try {
+      await getDb();
+      console.log('Database connected.');
+      if (warmOllamaModel) {
+        warmOllamaModel().catch(() => {});
+      }
+    } catch (err) {
+      console.error('Database connection failed:', err);
+    }
+  });
+}
 
 export default app;
