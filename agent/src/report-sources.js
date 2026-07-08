@@ -245,7 +245,16 @@ function numberVariantsForCitation(value) {
 export function upgradeReportCitations(text, sourceRows = []) {
   if (!text || !sourceRows.length) return text;
 
-  let out = text;
+  // Extract all code blocks (like ```json-chart ... ```) to prevent citations from being injected into them
+  const codeBlocks = [];
+  const codePlaceholderPrefix = `__CODE_BLOCK_PLACEHOLDER_${Date.now()}_`;
+  let placeholderIndex = 0;
+
+  let out = text.replace(/(```[\s\S]*?```)/g, (match) => {
+    const placeholder = `${codePlaceholderPrefix}${placeholderIndex++}__`;
+    codeBlocks.push({ placeholder, content: match });
+    return placeholder;
+  });
 
   const byPdf = [];
   for (const row of sourceRows) {
@@ -353,6 +362,11 @@ export function upgradeReportCitations(text, sourceRows = []) {
     } else {
       out += `\n\n## Sources\n${sourcesBlock}\n`;
     }
+  }
+
+  // Restore the original code blocks literally to avoid any $ issue
+  for (const block of codeBlocks) {
+    out = out.split(block.placeholder).join(block.content);
   }
 
   return out;
