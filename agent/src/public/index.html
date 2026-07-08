@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SusTally — BRSR ESG Analyst</title>
+  <meta name="description" content="Analyze corporate BRSR sustainability reports with local Ollama AI.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:opsz,wght@6..144,400..700&family=Roboto:wght@400;500&display=swap" rel="stylesheet">
+
+  <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1.0/dist/markdown-it.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+
+    <!-- Gemini-style sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <button id="newChatBtn" class="new-chat-btn" title="New chat">
+          <i data-lucide="square-pen"></i>
+          <span>New chat</span>
+        </button>
+      </div>
+
+      <div class="sidebar-scroll">
+        <p class="sidebar-label">Recent</p>
+        <div class="chat-history-list" id="chatHistoryList">
+          <div class="empty-state">
+            <p>No recent chats</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-footer">
+        <button id="viewReportsBtn" class="sidebar-footer-btn" title="Indexed reports">
+          <i data-lucide="database"></i>
+          <span>Reports</span>
+        </button>
+        <button id="themeToggleBtn" class="sidebar-footer-btn" title="Toggle theme">
+          <i data-lucide="moon" id="themeIcon"></i>
+        </button>
+      </div>
+    </aside>
+
+  <div class="sidebar-backdrop hidden" id="sidebarBackdrop"></div>
+
+    <!-- Main -->
+    <main class="main-content">
+      <header class="top-bar">
+        <button id="menuToggleBtn" class="icon-btn mobile-menu-btn" title="Menu" aria-label="Open menu">
+          <i data-lucide="menu"></i>
+        </button>
+        <div class="model-chip">
+          <span class="model-chip-icon">✦</span>
+          <span class="model-chip-name">SusTally ESG</span>
+          <span class="model-chip-sub" id="agentStatusText">Ready</span>
+        </div>
+        <div class="top-bar-actions">
+          <button id="clearChatBtn" class="icon-btn" title="Clear chat">
+            <i data-lucide="trash-2"></i>
+          </button>
+        </div>
+        <div class="agent-avatar hidden" id="agentAvatar" aria-hidden="true"></div>
+      </header>
+
+      <div class="chat-scroll">
+        <div class="chat-container" id="chatContainer">
+          <div class="chat-welcome">
+            <div class="welcome-gemini-icon">
+              <span class="gemini-gradient">✦</span>
+            </div>
+            <h1 class="welcome-greeting">Hello</h1>
+            <p class="welcome-sub">Ask anything about BRSR &amp; ESG sustainability data</p>
+
+            <div class="quick-prompts-grid">
+              <button class="quick-prompt-card" data-prompt="Analyze and compare Scope 1 emissions and renewable energy share of Infosys Limited and Asian Paints Limited in 2026. Include a bar chart.">
+                <span class="prompt-text">Compare Infosys vs Asian Paints emissions</span>
+              </button>
+              <button class="quick-prompt-card" data-prompt="Analyze the Scope 1 and Scope 2 emissions trend for Infosys Limited from 2025 to 2026. Include a line chart with your analysis.">
+                <span class="prompt-text">Infosys emissions trend</span>
+              </button>
+              <button class="quick-prompt-card" data-prompt="Analyze average carbon emissions intensity across all sectors in 2025. Rank sectors and show a pie chart of sector share.">
+                <span class="prompt-text">Carbon intensity by sector</span>
+              </button>
+              <button class="quick-prompt-card" id="customXmlPrompt" data-prompt="Analyze the top 5 companies with the highest female employee share in 2025. Show a bar chart and a pie chart of their relative shares.">
+                <span class="prompt-text">Top companies by female workforce share</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <footer class="input-dock">
+        <div class="upload-progress-container hidden" id="uploadProgressContainer">
+          <div class="upload-progress-header">
+            <span id="uploadStatusText">Indexing report…</span>
+            <span id="uploadPercentage">0%</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+        </div>
+
+        <div class="agent-logs-panel hidden" id="agentLogsPanel">
+          <div class="logs-header">
+            <span>Agent steps</span>
+            <button id="closeLogsBtn" class="icon-btn"><i data-lucide="x"></i></button>
+          </div>
+          <div class="logs-content" id="logsContent"></div>
+        </div>
+
+        <div class="input-pill">
+          <input type="file" id="fileInput" accept=".xml,.xbrl" class="hidden-file-input">
+          <button id="attachBtn" class="icon-btn attach-btn" title="Upload BRSR XML">
+            <i data-lucide="plus"></i>
+          </button>
+          <textarea id="chatInput" placeholder="Ask about emissions, water, diversity, sectors…" rows="1"></textarea>
+          <button id="sendBtn" class="send-btn" disabled aria-label="Send">
+            <i data-lucide="arrow-up"></i>
+          </button>
+        </div>
+        <p class="input-disclaimer">SusTally cites verified BRSR data via Ollama. Answers may be inaccurate — verify important figures.</p>
+      </footer>
+    </main>
+  </div>
+
+  <div class="drag-drop-overlay hidden" id="dragDropOverlay">
+    <div class="drag-drop-box">
+      <i data-lucide="upload-cloud" class="drag-icon"></i>
+      <h2>Drop BRSR XML to index</h2>
+      <p>.xml or .xbrl corporate sustainability filing</p>
+    </div>
+  </div>
+
+  <div class="modal-overlay hidden" id="reportsModal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>Indexed BRSR reports</h3>
+        <button id="closeReportsModalBtn" class="icon-btn"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body">
+        <p class="modal-info-bar">
+          Total: <span id="reportsCount">0</span> reports
+        </p>
+        <div class="reports-table-container">
+          <table class="reports-table">
+            <thead>
+              <tr>
+                <th>Company</th>
+                <th>Year</th>
+                <th>Type</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="reportsTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

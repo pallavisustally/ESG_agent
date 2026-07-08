@@ -1,0 +1,92 @@
+{
+  "1": {
+    "durationMs": 3513,
+    "thinkingLoops": 2,
+    "toolCalls": [
+      {
+        "tool": "list_companies",
+        "message": "Retrieving list of companies...",
+        "start": 1783060466810,
+        "durationMs": 7,
+        "responseSummary": "Found 1658 companies."
+      }
+    ],
+    "sqlExecuted": null,
+    "responseText": "## Executive Summary\nThe database contains too many companies to list exhaustively in one response. Instead of a full dump, the system requires targeted search using a company keyword.\n\n## Key Findings\n- Total company count is large: **1,658 companies**.\n- Full listing is intentionally blocked to avoid exhausting context.\n- Recommended way to find a company: search by keyword with SQL, e.g.  \n  `SELECT DISTINCT company FROM reports WHERE company LIKE '%Infosys%'`\n\n## Analysis\nThe available dataset is broad and covers a large universe of Indian companies. Because of the size, the database is designed for focused retrieval rather than full enumeration in a single output.\n\n## Recommendation / Insight\nIf you want, tell me a keyword, sector, or partial company name and I’ll return the matching companies.",
+    "chartJson": null,
+    "chartValidation": {
+      "valid": true,
+      "message": "Chart not required."
+    },
+    "error": null
+  },
+  "2": {
+    "durationMs": 7291,
+    "thinkingLoops": 2,
+    "toolCalls": [
+      {
+        "tool": "get_company_report",
+        "message": "Fetching structured BRSR report for \"Tata Consultancy Services Limited\" in year 2025",
+        "start": 1783060473948,
+        "durationMs": 0,
+        "responseSummary": "Retrieved structured data successfully."
+      }
+    ],
+    "sqlExecuted": null,
+    "responseText": "## Executive Summary\nTCS (Tata Consultancy Services Limited) reported total revenue of **₹2,553,240,000,000** in **2025**. That is **₹2.553 trillion** or about **₹2,55,324 crore**.\n\n## Key Findings\n- **TCS total revenue (2025): ₹2,553,240,000,000**\n- Equivalent format: **₹2.553 trillion**\n- Equivalent in crores: **~₹2,55,324 crore**\n\n## Analysis\nThe company report for FY 2024–25 lists TCS’s total revenue directly as **₹2.55324 trillion**. No comparison was requested, so the main takeaway is simply the reported top-line revenue for the year.\n\n## Recommendation / Insight\nIf you want, I can also provide TCS’s **year-on-year revenue trend**, or compare its revenue with other Indian IT companies.",
+    "chartJson": null,
+    "chartValidation": {
+      "valid": true,
+      "message": "Chart not required."
+    },
+    "error": null
+  },
+  "3": {
+    "durationMs": 3241,
+    "thinkingLoops": 3,
+    "toolCalls": [
+      {
+        "tool": "get_company_report",
+        "message": "Fetching structured BRSR report for \"HDFC Bank\" in year 2025",
+        "start": 1783060484802,
+        "durationMs": 0,
+        "responseSummary": "No report found."
+      },
+      {
+        "tool": "list_company_reports",
+        "message": "Checking available reports for \"HDFC Bank\"...",
+        "start": 1783060485856,
+        "durationMs": 38,
+        "responseSummary": "Found 0 report(s)."
+      },
+      {
+        "tool": "list_companies",
+        "message": "Retrieving list of companies...",
+        "start": 1783060486940,
+        "durationMs": 4,
+        "responseSummary": "Found 1658 companies."
+      }
+    ],
+    "sqlExecuted": null,
+    "responseText": null,
+    "chartJson": null,
+    "chartValidation": {
+      "valid": true,
+      "message": "Chart not required."
+    },
+    "error": "Agent failed to complete reasoning within the iteration limit."
+  },
+  "4": {
+    "durationMs": 246,
+    "thinkingLoops": 1,
+    "toolCalls": [],
+    "sqlExecuted": null,
+    "responseText": null,
+    "chartJson": null,
+    "chartValidation": {
+      "valid": true,
+      "message": "Chart not required."
+    },
+    "error": "Failed to connect to LLM provider. OpenRouter model \"openai/gpt-5.4-mini\" may be rate-limited. Try another OPENROUTER_MODEL in .env. OpenRouter returned HTTP 402: Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits"
+  }
+}

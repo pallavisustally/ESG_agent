@@ -1,0 +1,31 @@
+{
+  "name": "sustally-brsr-agent",
+  "version": "1.0.0",
+  "description": "BRSR/ESG sustainability analyst with Ollama tool-calling agent",
+  "type": "module",
+  "scripts": {
+    "preprocess": "node agent/scripts/preprocess.js",
+    "enrich:sources": "node agent/scripts/enrich_report_sources.js --with-pages",
+    "download-reports": "node agent/scripts/download_nse_reports.js",
+    "install-browser": "npx puppeteer browsers install chrome",
+    "report-counts": "node agent/scripts/report_counts.js",
+    "evaluate": "node agent/scripts/evaluate_agent.js",
+    "evaluate:judge": "node agent/scripts/evaluate_with_judge.js",
+    "compare:models": "node agent/scripts/compare_models.js",
+    "compare:gpt-deepseek": "node agent/scripts/compare_gpt_deepseek.js --fast",
+    "test:citations": "node agent/scripts/test_citations.js",
+    "dev": "node agent/src/server.js",
+    "ui": "node agent/src/server.js",
+    "start": "node agent/src/server.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "fast-xml-parser": "^5.9.3",
+    "multer": "^2.1.1",
+    "pdfjs-dist": "^4.10.38",
+    "puppeteer": "^25.1.0",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^6.0.1"
+  }
+}

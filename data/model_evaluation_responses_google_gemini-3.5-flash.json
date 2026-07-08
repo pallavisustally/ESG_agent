@@ -1,0 +1,15 @@
+{
+  "1": {
+    "durationMs": 261,
+    "thinkingLoops": 1,
+    "toolCalls": [],
+    "sqlExecuted": null,
+    "responseText": null,
+    "chartJson": null,
+    "chartValidation": {
+      "valid": true,
+      "message": "Chart not required."
+    },
+    "error": "Failed to connect to LLM provider. OpenRouter model \"google/gemini-3.5-flash\" may be rate-limited. Try another OPENROUTER_MODEL in .env. OpenRouter returned HTTP 402: Insufficient credits. This account never purchased credits. Make sure your key is on the correct account or org, and if so, purchase more at https://openrouter.ai/settings/credits"
+  }
+}

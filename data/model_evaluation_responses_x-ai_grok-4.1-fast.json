@@ -1,0 +1,15 @@
+{
+  "1": {
+    "durationMs": 216,
+    "thinkingLoops": 1,
+    "toolCalls": [],
+    "sqlExecuted": null,
+    "responseText": null,
+    "chartJson": null,
+    "chartValidation": {
+      "valid": true,
+      "message": "Chart not required."
+    },
+    "error": "Failed to connect to LLM provider. OpenRouter model \"x-ai/grok-4.1-fast\" may be rate-limited. Try another OPENROUTER_MODEL in .env. OpenRouter returned HTTP 404: Grok 4.1 Fast is deprecated. xAI recommends switching to Grok 4.3 (https://openrouter.ai/x-ai/grok-4.3)"
+  }
+}
