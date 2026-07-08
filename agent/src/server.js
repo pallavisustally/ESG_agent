@@ -233,3 +233,5 @@ app.listen(PORT, async () => {
     console.error('Database connection failed:', err);
   }
 });
+
+export default app;
