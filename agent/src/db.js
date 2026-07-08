@@ -1,5 +1,3 @@
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
 import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
@@ -22,10 +20,90 @@ let dbInstance = null;
 export async function getDb() {
   if (dbInstance) return dbInstance;
 
-  dbInstance = await open({
-    filename: DB_PATH,
-    driver: sqlite3.Database
-  });
+  if (process.env.VERCEL) {
+    console.log("Initializing database using sql.js for Vercel...");
+    const initSqlJs = (await import('sql.js')).default;
+    const SQL = await initSqlJs();
+    
+    let fileBuffer;
+    if (fs.existsSync(DB_PATH)) {
+      fileBuffer = fs.readFileSync(DB_PATH);
+      console.log(`Loaded SQLite database from ${DB_PATH} (${fileBuffer.length} bytes)`);
+    } else {
+      fileBuffer = Buffer.alloc(0);
+      console.log(`Database file not found at ${DB_PATH}. Initializing empty database.`);
+    }
+    
+    const db = new SQL.Database(fileBuffer);
+    
+    class SqlJsWrapper {
+      constructor(db, filePath) {
+        this.db = db;
+        this.filePath = filePath;
+      }
+
+      async exec(sql) {
+        this.db.run(sql);
+        this.saveToDisk();
+      }
+
+      async all(sql, params = []) {
+        const stmt = this.db.prepare(sql);
+        stmt.bind(Array.isArray(params) ? params : [params]);
+        const rows = [];
+        while (stmt.step()) {
+          rows.push(stmt.getAsObject());
+        }
+        stmt.free();
+        return rows;
+      }
+
+      async get(sql, params = []) {
+        const stmt = this.db.prepare(sql);
+        stmt.bind(Array.isArray(params) ? params : [params]);
+        let row = null;
+        if (stmt.step()) {
+          row = stmt.getAsObject();
+        }
+        stmt.free();
+        return row;
+      }
+
+      async run(sql, params = []) {
+        const stmt = this.db.prepare(sql);
+        stmt.bind(Array.isArray(params) ? params : [params]);
+        stmt.step();
+        stmt.free();
+        this.saveToDisk();
+        return {
+          changes: this.db.getRowsModified()
+        };
+      }
+
+      saveToDisk() {
+        if (this.filePath && !this.filePath.startsWith(':memory:')) {
+          try {
+            const data = this.db.export();
+            const buffer = Buffer.from(data);
+            fs.writeFileSync(this.filePath, buffer);
+          } catch (err) {
+            console.warn(`[SqlJsWrapper] Failed to write database to disk: ${err.message}`);
+          }
+        }
+      }
+    }
+
+    dbInstance = new SqlJsWrapper(db, DB_PATH);
+  } else {
+    // Local: Use native sqlite3 driver
+    const sqlite3 = (await import('sqlite3')).default;
+    const { open } = await import('sqlite');
+    
+    dbInstance = await open({
+      filename: DB_PATH,
+      driver: sqlite3.Database
+    });
+  }
 
   await initDb(dbInstance);
   return dbInstance;
