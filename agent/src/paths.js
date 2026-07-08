@@ -19,12 +19,18 @@ export function resolveFromAgent(...segments) {
 
 /** BRSR/ESG XBRL reports: data/xbrl/2025/SYMBOL/, data/xbrl/2026/SYMBOL/ */
 export function resolveXbrlDir() {
+  if (process.env.VERCEL) {
+    return "/tmp/xbrl";
+  }
   return process.env.XBRL_DIR
     ? path.resolve(process.env.XBRL_DIR)
     : resolveFromProject("data", "xbrl");
 }
 
 export function resolveDbPath() {
+  if (process.env.VERCEL) {
+    return "/tmp/database.db";
+  }
   return process.env.DB_PATH
     ? path.resolve(process.env.DB_PATH)
     : resolveFromProject("data", "database.db");

@@ -13,6 +13,22 @@ let startupError = null;
 
 async function loadModules() {
   try {
+    // If running on Vercel, copy database.db to /tmp/database.db
+    if (process.env.VERCEL) {
+      const dbSource = resolveFromProject("data", "database.db");
+      const dbTarget = "/tmp/database.db";
+      if (fs.existsSync(dbSource)) {
+        const targetDir = path.dirname(dbTarget);
+        if (!fs.existsSync(targetDir)) {
+          fs.mkdirSync(targetDir, { recursive: true });
+        }
+        if (!fs.existsSync(dbTarget)) {
+          fs.copyFileSync(dbSource, dbTarget);
+          console.log("Database copied to /tmp/database.db");
+        }
+      }
+    }
+
     const dbModule = await import('./db.js');
     getAvailableReports = dbModule.getAvailableReports;
     deleteReport = dbModule.deleteReport;
@@ -40,9 +56,14 @@ async function loadModules() {
 const loadPromise = loadModules();
 
 // BRSR/ESG XBRL directory (data/xbrl/2025/SYMBOL/, etc.)
-const XBRL_DIR = resolveXbrlDir();
-if (!fs.existsSync(XBRL_DIR)) {
-  fs.mkdirSync(XBRL_DIR, { recursive: true });
+let XBRL_DIR = null;
+try {
+  XBRL_DIR = resolveXbrlDir();
+  if (!fs.existsSync(XBRL_DIR)) {
+    fs.mkdirSync(XBRL_DIR, { recursive: true });
+  }
+} catch (err) {
+  console.error('Failed to create XBRL_DIR:', err);
 }
 
 // Configure multer storage
@@ -273,8 +294,11 @@ if (!process.env.VERCEL) {
         : 'Ollama';
     console.log(`Server is running at http://localhost:${PORT} (LLM: ${provider})`);
     try {
-      await getDb();
-      console.log('Database connected.');
+      await loadPromise;
+      if (getDb) {
+        await getDb();
+        console.log('Database connected.');
+      }
       if (warmOllamaModel) {
         warmOllamaModel().catch(() => {});
       }
