@@ -8,6 +8,7 @@
         "includeFiles": [
           "node_modules/sql.js/dist/sql-wasm.wasm",
           "data/database.db",
+          "data/nse_sustainability_metadata.json",
           "agent/src/public/index.html",
           "agent/src/public/style.css",
           "agent/src/public/app.js"

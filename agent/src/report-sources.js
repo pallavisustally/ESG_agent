@@ -129,6 +129,20 @@ export function buildSourcesPayload(row, metricPages = null) {
   };
 }
 
+function attachMetadataUrls(row) {
+  const meta = lookupNseMetadata({
+    filename: row.filename,
+    company: row.company,
+    year: row.year,
+  });
+  if (!row.pdf_url && !row.xbrl_url && !meta?.pdfUrl && !meta?.xbrlUrl) return row;
+  return {
+    ...row,
+    pdf_url: row.pdf_url || meta?.pdfUrl || null,
+    xbrl_url: row.xbrl_url || meta?.xbrlUrl || null,
+  };
+}
+
 export function enrichSqlRows(rows, sourceRowsByKey = new Map()) {
   if (!Array.isArray(rows) || rows.length === 0) return rows;
 
@@ -136,9 +150,10 @@ export function enrichSqlRows(rows, sourceRowsByKey = new Map()) {
     const key = `${row.company}|${row.year}`;
     const sourceRow = sourceRowsByKey.get(key);
     if (!sourceRow) {
-      const sources = buildSourcesPayload(row);
+      const withMeta = attachMetadataUrls(row);
+      const sources = buildSourcesPayload(withMeta);
       return {
-        ...row,
+        ...withMeta,
         ...sources.flat_fields,
         report_pdf_url: sources.report_pdf_url,
         report_xbrl_url: sources.report_xbrl_url,
@@ -155,7 +170,7 @@ export function enrichSqlRows(rows, sourceRowsByKey = new Map()) {
       }
     }
 
-    const merged = { ...row, ...sourceRow };
+    const merged = attachMetadataUrls({ ...row, ...sourceRow });
     const sources = buildSourcesPayload(merged, metricPages);
     return {
       ...row,
@@ -214,6 +229,58 @@ function citationMarkdown(page, pdfUrl) {
   return page ? `[p. ${page}](${pdfUrl})` : `[report](${pdfUrl})`;
 }
 
+function escapeRegex(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Model-invented relative links like [source](report) resolve to /report on the app host. */
+const BROKEN_RELATIVE_LINK_RE = /\[(?:source|report)\]\((?:report|\/report|null|report_pdf_url|#?)\)/gi;
+
+function resolvePdfUrlForRow(row) {
+  let pdfUrl = row.pdf_url || row.report_pdf_url || null;
+  if (!pdfUrl) {
+    const meta = lookupNseMetadata({
+      filename: row.filename,
+      company: row.company,
+      year: row.year,
+    });
+    pdfUrl = meta?.pdfUrl || null;
+  }
+  return pdfUrl;
+}
+
+function repairBrokenLinksNearCompany(out, company, citation) {
+  const companyEsc = escapeRegex(company);
+  if (!companyEsc) return out;
+
+  return out.replace(
+    new RegExp(
+      `^([^\n]*${companyEsc}[^\n]*?)(\\[(?:source|report)\\]\\([^\\)]*\\)|\\(no citation available\\)|\\bno citation available\\b)`,
+      'gim',
+    ),
+    (_, prefix) => `${prefix}${citation}`,
+  );
+}
+
+function repairOrphanedBrokenLinks(out, byPdf) {
+  const sorted = [...byPdf].sort(
+    (a, b) => (b.row.company?.length || 0) - (a.row.company?.length || 0),
+  );
+
+  return out.replace(BROKEN_RELATIVE_LINK_RE, (match, offset, whole) => {
+    const lineStart = whole.lastIndexOf('\n', offset - 1) + 1;
+    const lineEnd = whole.indexOf('\n', offset);
+    const line = whole.slice(lineStart, lineEnd === -1 ? whole.length : lineEnd);
+
+    for (const { row, pdfUrl, preferredPage } of sorted) {
+      if (row.company && line.includes(row.company)) {
+        return citationMarkdown(preferredPage, pdfUrl);
+      }
+    }
+    return '';
+  });
+}
+
 function numberVariantsForCitation(value) {
   const num = Number(value);
   if (!Number.isFinite(num) || num === 0) return [];
@@ -266,25 +333,15 @@ export function upgradeReportCitations(text, sourceRows = []) {
         pages = {};
       }
     }
-    const pdfUrl = row.pdf_url || row.report_pdf_url;
+    const pdfUrl = resolvePdfUrlForRow(row);
     if (!pdfUrl) continue;
     byPdf.push({ row, pages, pdfUrl, preferredPage: preferredPageForRow(pages) });
   }
 
-  // Company-local broken placeholders -> real citation
+  // Company-local broken placeholders -> real citation (with or without page numbers)
   for (const { row, pdfUrl, preferredPage } of byPdf) {
-    if (!preferredPage) continue;
     const pageCitation = citationMarkdown(preferredPage, pdfUrl);
-    const company = String(row.company || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (!company) continue;
-
-    out = out.replace(
-      new RegExp(
-        `(${company}[\\s\\S]{0,240}?)(\\[report\\]\\(null\\)|\\[source\\]\\([^\\)]*\\)|\\(no citation available\\)|no citation available)`,
-        'gi',
-      ),
-      `$1${pageCitation}`,
-    );
+    out = repairBrokenLinksNearCompany(out, row.company, pageCitation);
   }
 
   // [report](exact-url) -> [p. N](url)
@@ -306,10 +363,10 @@ export function upgradeReportCitations(text, sourceRows = []) {
     out = out.replace(/\(no citation available\)/gi, `(${pageCitation})`);
     out = out.replace(/\bno citation available\b/gi, pageCitation);
   } else {
-    // Multi-report: still wipe null placeholders near a recognizable company if possible;
-    // leftover nulls become report links only when we can infer the company row later.
     out = out.replace(/\[source\]\(report_pdf_url\)/gi, '');
   }
+
+  out = repairOrphanedBrokenLinks(out, byPdf);
 
   // Inject citation after known metric VALUES (with ESG unit or clear standalone decimals).
   for (const { row, pages, pdfUrl } of byPdf) {
