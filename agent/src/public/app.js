@@ -594,19 +594,38 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // 1. Extract charts
-    const chartRegex = /```json-chart\s*([\s\S]*?)\s*```/g;
+    // Support ```json-chart```, ```chart``` and ```json``` fences that contain chart configs
+    const chartRegex = /```(json-chart|chart|json)\s*([\s\S]*?)\s*```/g;
     let match;
     const chartsToRender = [];
     let cleanedText = text;
 
     while ((match = chartRegex.exec(text)) !== null) {
       try {
-        const chartData = JSON.parse(match[1].trim());
+        const fenceType = match[1];
+        const jsonPayload = match[2];
+
+        const chartData = JSON.parse(jsonPayload.trim());
+
+        // Only treat this block as a chart if it looks like a chart config
+        const looksLikeChart =
+          chartData &&
+          (chartData.type === 'chart' ||
+            chartData.chartType ||
+            Array.isArray(chartData.datasets) ||
+            Array.isArray(chartData.series) ||
+            (chartData.data && (Array.isArray(chartData.data) || Array.isArray(chartData.data?.datasets))));
+
+        if (!looksLikeChart) {
+          // Skip replacing this block; leave JSON rendered as normal code
+          continue;
+        }
+
         const chartId = 'chart-' + Math.random().toString(36).substring(2, 9);
         chartsToRender.push({ id: chartId, data: chartData });
         cleanedText = cleanedText.replace(match[0], `<div class="chart-placeholder" data-chart-id="${chartId}"></div>`);
       } catch (err) {
-        console.error('Failed to parse chart JSON:', err, match[1]);
+        console.error('Failed to parse chart JSON:', err, match[2]);
       }
     }
 
