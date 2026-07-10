@@ -3,7 +3,25 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
+import cookieParser from 'cookie-parser';
 import { AGENT_ROOT, resolveFromProject, resolveXbrlDir } from './paths.js';
+import {
+  isFirebaseAuthConfigured,
+  verifyFirebaseIdToken,
+  createSessionToken,
+  getUserFromRequest,
+  setSessionCookie,
+  clearSessionCookie,
+  requireAuth,
+  getPublicFirebaseConfig,
+} from './auth.js';
+import {
+  findOrCreateUser,
+  getUserChatSessions,
+  upsertUserChatSession,
+  deleteUserChatSession,
+  migrateUserChatSessions,
+} from './user-chats.js';
 
 // Load environment variables
 dotenv.config();
@@ -92,6 +110,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+app.use(cookieParser());
 app.use(express.static(path.join(AGENT_ROOT, 'src', 'public')));
 
 // Diagnostic check middleware
@@ -147,7 +166,118 @@ app.get('/api/config', (req, res) => {
         : (process.env.OLLAMA_MODEL || 'qwen2.5:7b'),
     ollamaHost: process.env.OLLAMA_HOST || 'http://localhost:11434',
     provider: useOpenAI ? 'openai' : useOpenRouter ? 'openrouter' : 'ollama',
+    firebase: getPublicFirebaseConfig(),
+    authEnabled: isFirebaseAuthConfigured(),
   });
+});
+
+// API: Current authenticated user
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    const user = await getUserFromRequest(req);
+    res.json({
+      success: true,
+      authenticated: Boolean(user),
+      user: user || null,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// API: Firebase Sign-In
+app.post('/api/auth/firebase', async (req, res) => {
+  try {
+    const { idToken } = req.body;
+    if (!idToken) {
+      return res.status(400).json({ success: false, error: 'Firebase ID token is required.' });
+    }
+
+    const profile = await verifyFirebaseIdToken(idToken);
+    const user = await findOrCreateUser({
+      firebaseUid: profile.firebaseUid,
+      email: profile.email,
+      name: profile.name,
+      picture: profile.picture,
+    });
+
+    const token = await createSessionToken(user);
+    setSessionCookie(res, token);
+
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        picture: user.picture,
+      },
+    });
+  } catch (error) {
+    console.error('Firebase auth error:', error);
+    res.status(401).json({ success: false, error: error.message });
+  }
+});
+
+// API: Sign out
+app.post('/api/auth/logout', (req, res) => {
+  clearSessionCookie(res);
+  res.json({ success: true });
+});
+
+// API: List user chat sessions
+app.get('/api/sessions', requireAuth, async (req, res) => {
+  try {
+    const sessions = await getUserChatSessions(req.user.id);
+    res.json({ success: true, sessions });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// API: Create or update a chat session
+app.post('/api/sessions', requireAuth, async (req, res) => {
+  try {
+    const { id, title, history, timestamp } = req.body;
+    if (!id || !Array.isArray(history)) {
+      return res.status(400).json({ success: false, error: 'Session id and history are required.' });
+    }
+
+    await upsertUserChatSession(req.user.id, {
+      id,
+      title: title || 'New Sustainability Analysis',
+      history,
+      timestamp: timestamp || Date.now(),
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// API: Migrate local sessions on first sign-in
+app.post('/api/sessions/migrate', requireAuth, async (req, res) => {
+  try {
+    const { sessions = [] } = req.body;
+    const merged = await migrateUserChatSessions(req.user.id, sessions);
+    res.json({ success: true, sessions: merged });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// API: Delete a chat session
+app.delete('/api/sessions/:id', requireAuth, async (req, res) => {
+  try {
+    const deleted = await deleteUserChatSession(req.user.id, req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ success: false, error: 'Session not found.' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // API: Upload custom XML/XBRL report
@@ -237,42 +367,48 @@ app.post('/api/chat', async (req, res) => {
     
     res.end();
 
-    // Save chat interaction to backend JSON file
-    try {
-      const chatsFilePath = resolveFromProject('data', 'chats.json');
-      let chats = [];
-      
-      // Ensure data directory exists (just in case)
-      const dataDir = path.dirname(chatsFilePath);
-      if (!fs.existsSync(dataDir)) {
-        fs.mkdirSync(dataDir, { recursive: true });
-      }
+    // Save chat interaction without blocking the next request.
+    setImmediate(() => {
+      try {
+        const chatsFilePath = resolveFromProject('data', 'chats.json');
+        const MAX_STORED_CHATS = parseInt(process.env.MAX_STORED_CHATS, 10) || 200;
+        let chats = [];
+        
+        const dataDir = path.dirname(chatsFilePath);
+        if (!fs.existsSync(dataDir)) {
+          fs.mkdirSync(dataDir, { recursive: true });
+        }
 
-      if (fs.existsSync(chatsFilePath)) {
-        const fileContent = fs.readFileSync(chatsFilePath, 'utf8');
-        try {
-          chats = JSON.parse(fileContent);
-          if (!Array.isArray(chats)) {
+        if (fs.existsSync(chatsFilePath)) {
+          const fileContent = fs.readFileSync(chatsFilePath, 'utf8');
+          try {
+            chats = JSON.parse(fileContent);
+            if (!Array.isArray(chats)) {
+              chats = [];
+            }
+          } catch (parseErr) {
+            console.error('[Chat Storage] Error parsing chats.json, resetting to empty array:', parseErr);
             chats = [];
           }
-        } catch (parseErr) {
-          console.error('[Chat Storage] Error parsing chats.json, resetting to empty array:', parseErr);
-          chats = [];
         }
+
+        chats.push({
+          timestamp: new Date().toISOString(),
+          question: message,
+          response: result.text,
+          chatHistory: chatHistory
+        });
+
+        if (chats.length > MAX_STORED_CHATS) {
+          chats = chats.slice(-MAX_STORED_CHATS);
+        }
+
+        fs.writeFileSync(chatsFilePath, JSON.stringify(chats, null, 2), 'utf8');
+        console.log(`[Chat Storage] Chat saved to backend JSON file. Total stored chats: ${chats.length}`);
+      } catch (saveErr) {
+        console.error('[Chat Storage] Failed to save chat to chats.json:', saveErr);
       }
-
-      chats.push({
-        timestamp: new Date().toISOString(),
-        question: message,
-        response: result.text,
-        chatHistory: chatHistory
-      });
-
-      fs.writeFileSync(chatsFilePath, JSON.stringify(chats, null, 2), 'utf8');
-      console.log(`[Chat Storage] Chat saved to backend JSON file. Total stored chats: ${chats.length}`);
-    } catch (saveErr) {
-      console.error('[Chat Storage] Failed to save chat to chats.json:', saveErr);
-    }
+    });
 
   } catch (error) {
     console.error('Agent chat error:', error);

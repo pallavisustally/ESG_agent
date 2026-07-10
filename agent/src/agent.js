@@ -3,6 +3,7 @@ import { getReportData, getCompanyList, getAvailableReports, getDb, ensureMetric
 import { SYSTEM_PROMPT } from './system-prompt.js';
 import { callOllamaChat, getOllamaConfig } from './ollama-client.js';
 import { enrichSqlRows, enrichCompanyReport, upgradeReportCitations } from './report-sources.js';
+import { verifyAgentCitations } from './pdf-verifier.js';
 
 dotenv.config();
 
@@ -23,7 +24,23 @@ function trimChatHistory(chatHistory, maxTurns) {
   return userAssistant.slice(-maxTurns);
 }
 
-/** OpenRouter returns tool args as JSON strings; Ollama returns parsed objects. */
+function dedupeToolCalls(toolCalls = []) {
+  const seen = new Set();
+  const unique = [];
+
+  for (const call of toolCalls) {
+    const args = typeof call.function?.arguments === 'string'
+      ? call.function.arguments
+      : JSON.stringify(call.function?.arguments ?? {});
+    const key = `${call.function?.name}:${args}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(call);
+  }
+
+  return unique;
+}
+
 function parseToolArguments(args) {
   if (typeof args === 'string') {
     try {
@@ -81,6 +98,16 @@ function preferPdfBackedRows(rows, sourceRowsByKey) {
     }
   }
   return [...bestByKey.values()].map((entry) => entry.row);
+}
+
+function dedupeSourceRows(rows) {
+  const seen = new Map();
+  for (const row of rows) {
+    if (!row?.company || row.year == null) continue;
+    const key = `${String(row.company).toLowerCase()}|${row.year}`;
+    if (!seen.has(key)) seen.set(key, row);
+  }
+  return [...seen.values()];
 }
 
 export async function runAgent({
@@ -365,8 +392,8 @@ export async function runAgent({
     }
 
     const hasToolResults = messages.some((m) => m.role === 'tool');
-    // OpenRouter: single final response via done (avoids streamed + rendered duplicate text)
-    const useStream = hasToolResults && config.provider !== 'openrouter';
+    // Cloud providers: non-streaming final answer avoids duplicate/partial tool-call payloads.
+    const useStream = hasToolResults && config.provider === 'ollama';
     const finalIteration = iteration >= maxIterations;
     // On the last allowed iteration, force an answer (no more tools) to avoid hard failures.
     const toolsForCall = finalIteration ? undefined : tools;
@@ -387,7 +414,7 @@ export async function runAgent({
               ...messages,
               {
                 role: 'user',
-                content: 'Using the tool results already available, provide the final structured analysis now. Include page citations and PDF links. Do not call more tools.',
+                content: 'Using the tool results already available, provide the final structured analysis now. Include page citations and PDF links only when tool results provide <metric>_citation / ready_citations; otherwise show metric values only with no source links. Do not call more tools.',
               },
             ]
           : messages,
@@ -412,17 +439,14 @@ export async function runAgent({
 
     messages.push(assistantMessage);
 
-    const toolCalls = (!finalIteration && assistantMessage.tool_calls) || [];
+    const rawToolCalls = (!finalIteration && assistantMessage.tool_calls) || [];
 
-    if (toolCalls?.length > 0) {
-      const seenCalls = new Set();
-      const uniqueToolCalls = [];
-      for (const call of toolCalls) {
-        const key = `${call.function.name}:${JSON.stringify(call.function.arguments)}`;
-        if (!seenCalls.has(key)) {
-          seenCalls.add(key);
-          uniqueToolCalls.push(call);
-        }
+    if (rawToolCalls.length > 0) {
+      const uniqueToolCalls = dedupeToolCalls(rawToolCalls);
+
+      if (uniqueToolCalls.length !== rawToolCalls.length) {
+        assistantMessage = { ...assistantMessage, tool_calls: uniqueToolCalls };
+        messages[messages.length - 1] = assistantMessage;
       }
 
       const toolResults = await Promise.all(
@@ -452,15 +476,32 @@ export async function runAgent({
       finalText = normalizeChartJson(finalText);
       finalText = upgradeReportCitations(finalText, seenSourceRows);
 
+      let citationVerification = null;
+      const uniqueSourceRows = dedupeSourceRows(seenSourceRows);
+      const verifyCitations = process.env.VERIFY_CITATIONS !== 'false';
+      if (verifyCitations && uniqueSourceRows.length > 0) {
+        const verifyStarted = Date.now();
+        try {
+          citationVerification = await verifyAgentCitations(finalText, uniqueSourceRows);
+        } catch (verifyErr) {
+          console.warn('[Citation Verification] Failed:', verifyErr.message);
+        }
+        const verifyMs = Date.now() - verifyStarted;
+        if (verifyMs > 2000) {
+          console.log(`[Perf] Citation verification took ${verifyMs}ms (${uniqueSourceRows.length} source row(s))`);
+        }
+      }
+
       return {
         text: finalText,
+        citationVerification,
         chatHistory: messages
           .filter((m) => m.role === 'user' || m.role === 'assistant')
           .map((m) => {
             const isLast = m.content === assistantMessage.content;
             return {
               role: m.role,
-              text: isLast ? finalText : (m.content || ''),
+              content: isLast ? finalText : (m.content || ''),
             };
           }),
       };

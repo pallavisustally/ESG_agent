@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { resolveFromProject } from './paths.js';
+import { buildShareBreakdown } from './share-breakdown.js';
 
 const METADATA_PATH = process.env.METADATA_PATH
   ? path.resolve(process.env.METADATA_PATH)
@@ -85,9 +86,50 @@ export function lookupNseMetadata({ filename, company, year }) {
   return null;
 }
 
+/** SQL aliases that mean this row is a computed aggregate, not a company filing. */
+const AGGREGATE_ALIAS_RE = /^(avg_|average_|sum_|count_|min_|max_|median_)/i;
+const AGGREGATE_EXACT_KEYS = new Set(['avg', 'average', 'sum', 'count', 'median']);
+
+export function isComputedMetricRow(row) {
+  if (!row || typeof row !== 'object') return false;
+  // Sector / AVG() rows often omit company; those are aggregates.
+  if (!row.company || row.year == null) return true;
+
+  const keys = Object.keys(row);
+  // Explicit aggregate aliases only (avg_scope1, sum_emissions, count, …).
+  // Native columns like total_revenue / total_employee_count are NOT aggregates.
+  return keys.some(
+    (key) => AGGREGATE_ALIAS_RE.test(key) || AGGREGATE_EXACT_KEYS.has(key),
+  );
+}
+
+function buildAggregateSourcesPayload(row) {
+  return {
+    company: row.company ?? null,
+    year: row.year ?? null,
+    report_pdf_url: null,
+    report_xbrl_url: null,
+    metrics: {},
+    ready_citations: {},
+    flat_fields: {},
+    citable: false,
+    citation_policy: 'aggregate',
+    citation_hint:
+      'COMPUTED_AGGREGATE: This row is a SQL aggregate or sector summary. Show the computed value only — do not add p. N, [source](...), or "(Source: SQLite aggregate…)" labels.',
+  };
+}
+
 export function buildSourcesPayload(row, metricPages = null) {
+  if (isComputedMetricRow(row)) {
+    return buildAggregateSourcesPayload(row);
+  }
+
   const pages = metricPages && typeof metricPages === 'object' ? metricPages : {};
-  const pdfUrl = row.pdf_url || row.report_pdf_url || null;
+  const pdfUnavailable = Boolean(row.pdf_unavailable) || Boolean(pages.__pdf_unavailable);
+  const usablePages = { ...pages };
+  delete usablePages.__pdf_unavailable;
+
+  const pdfUrl = pdfUnavailable ? null : (row.pdf_url || row.report_pdf_url || null);
   const xbrlUrl = row.xbrl_url || row.report_xbrl_url || null;
 
   const metrics = {};
@@ -97,15 +139,11 @@ export function buildSourcesPayload(row, metricPages = null) {
   for (const metric of CITABLE_METRICS) {
     const num = Number(row[metric]);
     if (!Number.isFinite(num)) continue;
-    const page = pages[metric] ?? null;
-    const citation = page && pdfUrl
-      ? `[p. ${page}](${pdfUrl})`
-      : pdfUrl
-        ? `[report](${pdfUrl})`
-        : null;
+    const page = usablePages[metric] ?? null;
+    const citation = pdfUrl && page ? citationMarkdown(page, pdfUrl) : null;
     metrics[metric] = {
       value: num,
-      page,
+      page: citation ? page : null,
       citation,
     };
     if (citation) {
@@ -115,21 +153,31 @@ export function buildSourcesPayload(row, metricPages = null) {
     }
   }
 
+  const citable = Boolean(pdfUrl && Object.keys(readyCitations).length > 0);
+
   return {
     company: row.company,
     year: row.year,
-    report_pdf_url: pdfUrl,
+    report_pdf_url: citable ? pdfUrl : null,
     report_xbrl_url: xbrlUrl,
     metrics,
     ready_citations: readyCitations,
     flat_fields: flatFields,
-    citation_hint: pdfUrl
-      ? 'REQUIRED format: VALUE UNIT followed by the exact markdown from <metric>_citation (prefer [p. N](url) over [report](url)). Example: 56,820 tCO2e ([p. 39](https://...pdf))'
-      : 'No PDF URL available for this report; cite company and year only.',
+    citable,
+    citation_hint: citable
+      ? 'REQUIRED citation format: p. N [source](full_pdf_url#page=N) — page number as plain text, [source] as the clickable link to the PDF page. Example: 56,820 tCO2e p. 39 [source](https://...pdf#page=39). Never use [report], [p. N](url), or a ## Sources footer.'
+      : 'No PDF page citations for this report. Show metric values only — do not add p. N, [source](...), or any source links.',
   };
 }
 
 function attachMetadataUrls(row) {
+  if (row?.pdf_unavailable) {
+    return {
+      ...row,
+      pdf_url: null,
+      xbrl_url: row.xbrl_url || null,
+    };
+  }
   const meta = lookupNseMetadata({
     filename: row.filename,
     company: row.company,
@@ -149,6 +197,9 @@ export function enrichSqlRows(rows, sourceRowsByKey = new Map()) {
   return rows.map((row) => {
     const key = `${row.company}|${row.year}`;
     const sourceRow = sourceRowsByKey.get(key);
+    const mergedForBreakdown = sourceRow ? { ...sourceRow, ...row } : row;
+    const shareBreakdown = buildShareBreakdown(mergedForBreakdown);
+
     if (!sourceRow) {
       const withMeta = attachMetadataUrls(row);
       const sources = buildSourcesPayload(withMeta);
@@ -158,6 +209,7 @@ export function enrichSqlRows(rows, sourceRowsByKey = new Map()) {
         report_pdf_url: sources.report_pdf_url,
         report_xbrl_url: sources.report_xbrl_url,
         sources,
+        share_breakdown: shareBreakdown,
       };
     }
 
@@ -170,14 +222,25 @@ export function enrichSqlRows(rows, sourceRowsByKey = new Map()) {
       }
     }
 
-    const merged = attachMetadataUrls({ ...row, ...sourceRow });
-    const sources = buildSourcesPayload(merged, metricPages);
+    const merged = attachMetadataUrls({
+      ...row,
+      ...sourceRow,
+      pdf_unavailable:
+        sourceRow.pdf_unavailable
+        || row.pdf_unavailable
+        || Boolean(metricPages?.__pdf_unavailable),
+    });
+    const sources = buildSourcesPayload(
+      merged,
+      metricPages?.__pdf_unavailable ? null : metricPages,
+    );
     return {
       ...row,
       ...sources.flat_fields,
-      report_pdf_url: sourceRow.pdf_url || row.report_pdf_url || null,
+      report_pdf_url: sources.report_pdf_url,
       report_xbrl_url: sourceRow.xbrl_url || row.report_xbrl_url || null,
       sources,
+      share_breakdown: shareBreakdown,
     };
   });
 }
@@ -206,27 +269,45 @@ export function enrichCompanyReport(reportData, sourceRow) {
     flatRow[metric] = typeof fromMetrics === 'object' ? fromMetrics?.value : fromMetrics;
   }
 
-  const sources = buildSourcesPayload(flatRow, metricPages);
+  const sources = buildSourcesPayload(
+    { ...flatRow, pdf_unavailable: sourceRow?.pdf_unavailable },
+    metricPages,
+  );
+  const shareBreakdown = buildShareBreakdown({ ...flatRow, ...sourceRow });
   return {
     ...reportData,
     ...sources.flat_fields,
     report_pdf_url: sources.report_pdf_url,
     report_xbrl_url: sources.report_xbrl_url,
     sources,
+    share_breakdown: shareBreakdown,
   };
 }
 
 function preferredPageForRow(pages = {}) {
-  return pages.scope1_emissions
-    || pages.scope2_emissions
-    || pages.renewable_energy_share
-    || pages.female_employee_share
-    || Object.values(pages).find(Boolean)
+  const usable = { ...pages };
+  delete usable.__pdf_unavailable;
+  return usable.scope1_emissions
+    || usable.scope2_emissions
+    || usable.renewable_energy_share
+    || usable.female_employee_share
+    || Object.values(usable).find(Boolean)
     || null;
 }
 
+function pdfUrlWithPage(pdfUrl, page) {
+  if (!pdfUrl) return null;
+  const base = String(pdfUrl).split('#')[0];
+  if (page != null && Number(page) > 0) return `${base}#page=${page}`;
+  return base;
+}
+
 function citationMarkdown(page, pdfUrl) {
-  return page ? `[p. ${page}](${pdfUrl})` : `[report](${pdfUrl})`;
+  // Only emit citations when both a real PDF URL and a page number exist.
+  if (!pdfUrl || page == null || Number(page) <= 0) return '';
+  const url = pdfUrlWithPage(pdfUrl, page);
+  if (!url) return '';
+  return `p. ${page} [source](${url})`;
 }
 
 function escapeRegex(value) {
@@ -237,6 +318,7 @@ function escapeRegex(value) {
 const BROKEN_RELATIVE_LINK_RE = /\[(?:source|report)\]\((?:report|\/report|null|report_pdf_url|#?)\)/gi;
 
 function resolvePdfUrlForRow(row) {
+  if (row?.pdf_unavailable) return null;
   let pdfUrl = row.pdf_url || row.report_pdf_url || null;
   if (!pdfUrl) {
     const meta = lookupNseMetadata({
@@ -255,10 +337,13 @@ function repairBrokenLinksNearCompany(out, company, citation) {
 
   return out.replace(
     new RegExp(
-      `^([^\n]*${companyEsc}[^\n]*?)(\\[(?:source|report)\\]\\([^\\)]*\\)|\\(no citation available\\)|\\bno citation available\\b)`,
+      `^([^\\n]*${companyEsc}[^\\n]*?)(\\[(?:source|report)\\]\\((?:report|\\/report|null|report_pdf_url|#?)\\)|\\(no citation available\\)|\\bno citation available\\b)`,
       'gim',
     ),
-    (_, prefix) => `${prefix}${citation}`,
+    (full, prefix) => {
+      if (/p\.\s*\d+\s*\[source\]\(/i.test(full)) return full;
+      return `${prefix}${citation}`;
+    },
   );
 }
 
@@ -304,6 +389,217 @@ function numberVariantsForCitation(value) {
   return [...variants].filter((v) => v.replace(/,/g, '').length >= 3);
 }
 
+const METRIC_LINE_HINTS = {
+  scope1_emissions: /\bscope\s*1\b|scope1|direct emission/i,
+  scope2_emissions: /\bscope\s*2\b|scope2/i,
+  scope3_emissions: /\bscope\s*3\b|scope3/i,
+  energy_consumption: /\benergy consumption\b|\btotal energy\b/i,
+  renewable_energy_share: /\brenewable\b/i,
+  water_consumption: /\bwater consumption\b|\bwater use\b/i,
+  water_withdrawal: /\bwater withdrawal\b/i,
+  waste_generated: /\bwaste generated\b|\bwaste\b/i,
+  emissions_intensity: /\bemissions intensity\b|\bcarbon intensity\b/i,
+  energy_intensity: /\benergy intensity\b/i,
+  water_intensity: /\bwater intensity\b/i,
+  waste_intensity: /\bwaste intensity\b/i,
+  female_employee_share: /\bfemale\b|\bworkforce\b|\bdiversity\b|\bgender\b|\bemployee share\b/i,
+  female_board_share: /\bboard\b|\bdirector\b/i,
+  safety_ltifr: /\bltifr\b|\bsafety\b|\blost time\b/i,
+  total_revenue: /\brevenue\b|\bturnover\b/i,
+};
+
+const FEMALE_BREAKDOWN_RE = /\s*\([^)]*\bfemale permanent employees of[^)]*\btotal permanent employees\)/gi;
+const FEMALE_BOARD_BREAKDOWN_RE = /\s*\([^)]*\bfemale board directors of[^)]*\btotal board directors\)/gi;
+const EMISSION_OR_ENERGY_LINE_RE = /\bscope\s*[123]\b|scope[123]|emission|renewable|carbon|tco2|energy intensity/i;
+
+function lineMatchesMetric(line, metric) {
+  const hint = METRIC_LINE_HINTS[metric];
+  if (!hint) return true;
+
+  const metricLabel = (line.match(/\*\*([^*]+)\*\*/)?.[1] || line.split(':')[0] || line).toLowerCase();
+
+  if ((metric === 'female_employee_share' || metric === 'female_board_share')
+    && EMISSION_OR_ENERGY_LINE_RE.test(metricLabel)
+    && !/\bfemale\b|\bworkforce\b|\bdiversity\b|\bgender\b|\bboard\b/i.test(metricLabel)) {
+    return false;
+  }
+
+  if ((metric === 'renewable_energy_share' || metric.startsWith('scope'))
+    && /\bfemale permanent employees\b|\bfemale board directors\b/i.test(line)
+    && !hint.test(metricLabel)) {
+    return false;
+  }
+
+  return hint.test(metricLabel) || hint.test(line);
+}
+
+/** True if this line names the company, or sits under a ### Company heading. */
+function lineBelongsToCompany(text, lineStart, company) {
+  if (!company) return false;
+  const lineEnd = text.indexOf('\n', lineStart);
+  const line = text.slice(lineStart, lineEnd === -1 ? text.length : lineEnd);
+  if (line.includes(company)) return true;
+
+  // Walk backwards for nearest markdown heading; match ### Company Name sections.
+  const before = text.slice(0, lineStart);
+  const headingRe = /^#{1,4}\s+(.+?)\s*$/gm;
+  let lastHeading = null;
+  let match;
+  while ((match = headingRe.exec(before)) !== null) {
+    lastHeading = match[1].trim();
+  }
+  if (!lastHeading) return false;
+  // Stop at major section headings (## Key Findings) — only ### company subs count.
+  if (/^(executive summary|key findings|analysis|recommendation|insight|chart)/i.test(lastHeading)) {
+    return false;
+  }
+  return lastHeading === company
+    || lastHeading.toLowerCase() === company.toLowerCase()
+    || lastHeading.includes(company)
+    || company.includes(lastHeading);
+}
+
+function stripInventedSourceLabels(text) {
+  return String(text)
+    .replace(/\s*\(\s*Source:\s*SQLite aggregate[^)]*\)/gi, '')
+    .replace(/\s*\*\(\s*Source:\s*SQLite aggregate[^*]*\)\*/gi, '')
+    .replace(/\s*Source:\s*SQLite aggregate(?:,\s*year\s*\d{4})?/gi, '');
+}
+
+function stripIrrelevantShareBreakdowns(text) {
+  return String(text).split('\n').map((line) => {
+    const metricLabel = (line.match(/\*\*([^*]+)\*\*/)?.[1] || line.split(':')[0] || line).toLowerCase();
+    const isDiversityLine = /female|workforce|diversity|gender|board/.test(metricLabel);
+    if (isDiversityLine) return line;
+    if (!EMISSION_OR_ENERGY_LINE_RE.test(line)) return line;
+
+    return line
+      .replace(FEMALE_BREAKDOWN_RE, '')
+      .replace(FEMALE_BOARD_BREAKDOWN_RE, '');
+  }).join('\n');
+}
+
+function normalizeLegacyCitations(text, byPdf) {
+  let out = text;
+
+  out = out.replace(/\[p\.\s*(\d+)\]\(([^)]+)\)/gi, (_, page, url) => {
+    const base = String(url).split('#')[0];
+    return `p. ${page} [source](${base}#page=${page})`;
+  });
+
+  for (const { pdfUrl, preferredPage } of byPdf) {
+    const base = pdfUrl.split('#')[0];
+    const escaped = escapeRegex(base);
+    const replacement = citationMarkdown(preferredPage, pdfUrl);
+    out = out.replace(new RegExp(`\\[report\\]\\(${escaped}[^)]*\\)`, 'gi'), replacement);
+  }
+
+  for (const { row, pdfUrl, preferredPage } of byPdf) {
+    if (!row.company || !preferredPage) continue;
+    const companyEsc = escapeRegex(row.company);
+    const citation = citationMarkdown(preferredPage, pdfUrl);
+    out = out.replace(
+      new RegExp(
+        `(^[^\\n]*${companyEsc}[^\\n]*?)(?<!p\\.\\s*\\d+\\s)\\[source\\]\\(https?[^\\)]+\\)`,
+        'gim',
+      ),
+      `$1${citation}`,
+    );
+  }
+
+  if (byPdf.length === 1 && byPdf[0].preferredPage) {
+    const { pdfUrl, preferredPage } = byPdf[0];
+    const base = escapeRegex(pdfUrl.split('#')[0]);
+    const citation = citationMarkdown(preferredPage, pdfUrl);
+    out = out.replace(
+      new RegExp(`(?<!p\\.\\s*\\d+\\s)\\[source\\]\\(${base}[^)]*\\)`, 'gi'),
+      citation,
+    );
+  }
+
+  return out;
+}
+
+function dedupeInlineCitations(text) {
+  let out = text.replace(
+    /(?:p\.\s*\d+\s*)+\[source\]\(([^)]+)\)/gi,
+    (match, url) => {
+      const pageMatch = match.match(/p\.\s*(\d+)/i);
+      return pageMatch ? `p. ${pageMatch[1]} [source](${url})` : `[source](${url})`;
+    },
+  );
+  out = out.replace(/\(p\.\s*(\d+)\s*\[source\]\(([^)]+)\)\)/gi, ' p. $1 [source]($2)');
+
+  // Same line often gets citation after the % AND after the (breakdown) — keep one.
+  out = out.split('\n').map((line) => {
+    const citations = [...line.matchAll(/\s*p\.\s*(\d+)\s*\[source\]\(([^)]+)\)/gi)];
+    if (citations.length < 2) return line;
+
+    // Prefer the first citation's page/url; strip all, then append once after the primary value.
+    const page = citations[0][1];
+    const url = citations[0][2];
+    let cleaned = line.replace(/\s*p\.\s*\d+\s*\[source\]\([^)]+\)/gi, '');
+    cleaned = cleaned.replace(/\s+$/g, '');
+
+    // Insert after first % / unit / number cluster when possible; else append.
+    const insertAt = cleaned.search(
+      /\d[\d,]*(?:\.\d+)?\s*%|\d[\d,]*(?:\.\d+)?\s*(?:tCO2e|MtCO2e|MtCO2|tCO₂e)\b/i,
+    );
+    if (insertAt >= 0) {
+      const matched = cleaned.slice(insertAt).match(
+        /^(\d[\d,]*(?:\.\d+)?\s*(?:%|tCO2e|MtCO2e|MtCO2|tCO₂e))/i,
+      );
+      if (matched) {
+        const end = insertAt + matched[1].length;
+        return `${cleaned.slice(0, end)} p. ${page} [source](${url})${cleaned.slice(end)}`;
+      }
+    }
+    return `${cleaned} p. ${page} [source](${url})`;
+  }).join('\n');
+
+  return out;
+}
+
+function lineAlreadyHasCitation(line) {
+  return /p\.\s*\d+\s*\[source\]\(|\[p\.\s*\d+\]\(|\[source\]\(https?:/i.test(line);
+}
+
+function stripSourcesFooter(text) {
+  return text.replace(/\n##\s*Sources[\s\S]*$/i, '').trimEnd();
+}
+
+const SECTOR_HEADING_RE = /^(#{1,4}\s+)?(Materials|Consumer Services|Telecommunications|Other\/Industrial|Healthcare|Utilities|Consumer Defensive|Consumer Cyclical|Financial Services|Energy(?:\s*&\s*Renewables)?|Industrials|Technology)\b/i;
+const AGGREGATE_LINE_RE = /\b(average|avg\.?|median|aggregate|ranking|per sector|sector average|across all sectors|sector rankings)\b/i;
+
+function isSectorOrAggregateLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed) return false;
+  if (AGGREGATE_LINE_RE.test(trimmed)) return true;
+  if (SECTOR_HEADING_RE.test(trimmed)) return true;
+  return false;
+}
+
+function stripMalformedCitationLinks(text) {
+  return text
+    .replace(/\[(?:source|report)\]\([^)\n]*$/gim, '')
+    .replace(/\[(?:source|report)\]\(\s*\)/gi, '')
+    .replace(/\s+p\.\s*\d+\s*source\b/gi, '');
+}
+
+function stripMisleadingCitationsFromAggregates(text, companyNames = []) {
+  return text.split('\n').map((line) => {
+    if (companyNames.some((name) => name && line.includes(name))) return line;
+    if (!isSectorOrAggregateLine(line)) return line;
+
+    return line
+      .replace(/\s*p\.\s*\d+\s*\[source\]\([^)]+\)/gi, '')
+      .replace(/\s*\[source\]\([^)]+\)/gi, '')
+      .replace(/\s*\[source\]\([^)\n]+$/gi, '')
+      .replace(/\s*\[report\]\([^)]+\)/gi, '')
+      .trimEnd();
+  }).join('\n');
+}
+
 /**
  * Prefer metric-specific pages when upgrading [report](pdf) links.
  * Also repair broken placeholders the model invents: [report](null), [source](...), etc.
@@ -323,8 +619,12 @@ export function upgradeReportCitations(text, sourceRows = []) {
     return placeholder;
   });
 
+  // Model often invents this label for single-company rows — always remove first.
+  out = stripInventedSourceLabels(out);
+
   const byPdf = [];
   for (const row of sourceRows) {
+    if (row?.pdf_unavailable) continue;
     let pages = {};
     if (row.metric_pages_json) {
       try {
@@ -333,18 +633,22 @@ export function upgradeReportCitations(text, sourceRows = []) {
         pages = {};
       }
     }
+    if (pages.__pdf_unavailable) continue;
     const pdfUrl = resolvePdfUrlForRow(row);
-    if (!pdfUrl) continue;
-    byPdf.push({ row, pages, pdfUrl, preferredPage: preferredPageForRow(pages) });
+    const preferredPage = preferredPageForRow(pages);
+    // Only cite when we have both a live PDF URL and at least one page number.
+    if (!pdfUrl || !preferredPage) continue;
+    byPdf.push({ row, pages, pdfUrl, preferredPage });
   }
 
-  // Company-local broken placeholders -> real citation (with or without page numbers)
+  // Company-local broken placeholders -> real citation (only when page exists)
   for (const { row, pdfUrl, preferredPage } of byPdf) {
     const pageCitation = citationMarkdown(preferredPage, pdfUrl);
+    if (!pageCitation) continue;
     out = repairBrokenLinksNearCompany(out, row.company, pageCitation);
   }
 
-  // [report](exact-url) -> [p. N](url)
+  // [report](exact-url) -> p. N [source](url)
   for (const { pdfUrl, preferredPage } of byPdf) {
     if (!preferredPage) continue;
     const escapedUrl = pdfUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -358,24 +662,34 @@ export function upgradeReportCitations(text, sourceRows = []) {
   if (byPdf.length === 1) {
     const { pdfUrl, preferredPage } = byPdf[0];
     const pageCitation = citationMarkdown(preferredPage, pdfUrl);
-    out = out.replace(/\[report\]\(null\)/gi, pageCitation);
-    out = out.replace(/\[source\]\([^)]*\)/gi, pageCitation);
-    out = out.replace(/\(no citation available\)/gi, `(${pageCitation})`);
-    out = out.replace(/\bno citation available\b/gi, pageCitation);
-  } else {
-    out = out.replace(/\[source\]\(report_pdf_url\)/gi, '');
+    if (pageCitation) {
+      out = out.replace(/\[report\]\(null\)/gi, pageCitation);
+      out = out.replace(/\[source\]\((?:report|\/report|null|report_pdf_url)\)/gi, pageCitation);
+      out = out.replace(/\(no citation available\)/gi, pageCitation);
+      out = out.replace(/\bno citation available\b/gi, pageCitation);
+    }
   }
+
+  // Always strip invented / empty citation placeholders when we cannot repair them.
+  out = out.replace(/\s*\[(?:source|report)\]\((?:report|\/report|null|report_pdf_url|#?)\)/gi, '');
+  out = out.replace(/\s*\(no citation available\)/gi, '');
+  out = out.replace(/\s*\bno citation available\b/gi, '');
 
   out = repairOrphanedBrokenLinks(out, byPdf);
 
-  // Inject citation after known metric VALUES (with ESG unit or clear standalone decimals).
+  const companyNames = byPdf.map((entry) => entry.row.company).filter(Boolean);
+
+  // Inject citation after known metric VALUES only when the line (or ### heading) names that company.
   for (const { row, pages, pdfUrl } of byPdf) {
+    if (!row.company) continue;
+
     for (const metric of CITABLE_METRICS) {
       const page = pages[metric];
       const value = Number(row[metric]);
       if (!page || !Number.isFinite(value) || value === 0) continue;
 
       const citation = citationMarkdown(page, pdfUrl);
+      if (!citation) continue;
       if (out.includes(`${value}`) === false
         && out.replace(/,/g, '').includes(String(value).replace(/,/g, '')) === false) {
         continue;
@@ -391,12 +705,20 @@ export function upgradeReportCitations(text, sourceRows = []) {
 
         let didReplace = false;
         out = out.replace(re, (full, prefix, num, unit = '', offset) => {
+          const lineStart = out.lastIndexOf('\n', offset - 1) + 1;
+          if (!lineBelongsToCompany(out, lineStart, row.company)) return full;
+
+          const lineEnd = out.indexOf('\n', offset);
+          const line = out.slice(lineStart, lineEnd === -1 ? out.length : lineEnd);
+          if (!lineMatchesMetric(line, metric)) return full;
+          // Model already cited this bullet (often after the breakdown) — don't add another.
+          if (lineAlreadyHasCitation(line)) return full;
+
           const after = out.slice(offset + full.length, offset + full.length + 80);
-          if (/\[p\.\s*\d+\]\(|\[report\]\(|\[source\]\(/.test(after)) return full;
-          // Skip if this number is part of a year-like 20xx already cited nearby
+          if (/p\.\s*\d+\s*\[source\]\(|\[p\.\s*\d+\]\(|\[source\]\(/.test(after)) return full;
           if (/^20\d{2}$/.test(num)) return full;
           didReplace = true;
-          return `${prefix}${num}${unit} (${citation})`;
+          return `${prefix}${num}${unit} ${citation}`;
         });
         if (didReplace) break;
       }
@@ -411,15 +733,12 @@ export function upgradeReportCitations(text, sourceRows = []) {
     out = out.replace(/The absence of a PDF link[^.]*\./gi, '');
   }
 
-  const urls = [...new Set(byPdf.map((x) => x.pdfUrl).filter(Boolean))];
-  if (urls.length) {
-    const sourcesBlock = urls.map((u) => `- ${u}`).join('\n');
-    if (/##\s*Sources/i.test(out)) {
-      out = out.replace(/##\s*Sources[\s\S]*$/i, `## Sources\n${sourcesBlock}\n`);
-    } else {
-      out += `\n\n## Sources\n${sourcesBlock}\n`;
-    }
-  }
+  out = normalizeLegacyCitations(out, byPdf);
+  out = dedupeInlineCitations(out);
+  out = stripMisleadingCitationsFromAggregates(out, companyNames);
+  out = stripMalformedCitationLinks(out);
+  out = stripIrrelevantShareBreakdowns(out);
+  out = stripSourcesFooter(out);
 
   // Restore the original code blocks literally to avoid any $ issue
   for (const block of codeBlocks) {

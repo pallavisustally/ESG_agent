@@ -21,16 +21,181 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initialize Markdown-it
   const md = window.markdownit({
     html: true,
-    linkify: true,
+    linkify: false,
     typographer: true
   });
 
+  function escapeHtmlAttr(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;');
+  }
+
+  function normalizeSmartQuotes(text) {
+    return String(text || '')
+      .replace(/[\u201C\u201D]/g, '"')
+      .replace(/[\u2018\u2019]/g, "'");
+  }
+
+  function buildCitationHtml(page, url) {
+    const safeUrl = escapeHtmlAttr(url);
+    const pageLabel = page ? `p. ${page}` : '';
+    if (!safeUrl) {
+      return pageLabel
+        ? `<span class="metric-citation">${pageLabel}</span>`
+        : '';
+    }
+    return `<span class="metric-citation">${pageLabel}${pageLabel ? ' ' : ''}<a href="${safeUrl}" class="citation-source-link" target="_blank" rel="noopener noreferrer">source</a></span>`;
+  }
+
+  /** Hide PDF URLs — show only p. N and a clickable "source" label. */
+  function prepareCitationsForDisplay(text) {
+    let out = normalizeSmartQuotes(text);
+
+    out = out.replace(/p\.\s*(\d+)\s*\[source\]\(([^)]+)\)/gi, (_, page, url) =>
+      buildCitationHtml(page, url.trim())
+    );
+
+    out = out.replace(/\[p\.\s*(\d+)\]\(([^)]+)\)/gi, (_, page, url) =>
+      buildCitationHtml(page, url.trim())
+    );
+
+    out = out.replace(/\[source\]\(([^)]+)\)/gi, (_, url) =>
+      buildCitationHtml(null, url.trim())
+    );
+
+    out = out.replace(/\[report\]\(([^)]+)\)/gi, (_, url) =>
+      buildCitationHtml(null, url.trim())
+    );
+
+    // Repair broken HTML citations where href was stripped earlier
+    out = out.replace(
+      /p\.\s*(\d+)\s*<a\s+href="\s*"\s+class=["']citation-source-link["'][^>]*>source<\/a>/gi,
+      (_, page) => `<span class="metric-citation">p. ${page} <span class="citation-missing">source</span></span>`
+    );
+
+    out = out.replace(/\n##\s*Sources[\s\S]*$/i, '');
+    out = out.replace(/^\s*-\s*https?:\/\/\S+\.pdf\S*\s*$/gim, '');
+
+    // Protect href values, then strip only bare PDF URLs in plain text
+    const hrefSlots = [];
+    out = out.replace(/href="([^"]*)"/gi, (match, url) => {
+      const token = `__CITE_HREF_${hrefSlots.length}__`;
+      hrefSlots.push(url);
+      return `href="${token}"`;
+    });
+    out = out.replace(/(?<![="'\[(])\bhttps?:\/\/[^\s<>\)]+\.pdf[^\s<>\)]*/gi, '');
+    hrefSlots.forEach((url, i) => {
+      out = out.split(`__CITE_HREF_${i}__`).join(url);
+    });
+
+    return out;
+  }
+
+  /** During streaming, mask markdown citation syntax so URLs never flash on screen. */
+  function maskCitationsForStreaming(text) {
+    return String(text || '')
+      .replace(/p\.\s*(\d+)\s*\[source\]\([^)]*\)?/gi, 'p. $1 source')
+      .replace(/\[p\.\s*(\d+)\]\([^)]*\)?/gi, 'p. $1 source')
+      .replace(/\[source\]\([^)]*\)?/gi, 'source')
+      .replace(/\[report\]\([^)]*\)?/gi, 'source')
+      .replace(/https?:\/\/\S+\.pdf\S*/gi, '')
+      .replace(/\n##\s*Sources[\s\S]*$/i, '');
+  }
+
+  function enhanceCitationLinks(root) {
+    root.querySelectorAll('a[href]').forEach((anchor) => {
+      const href = (anchor.getAttribute('href') || '').trim();
+      const label = anchor.textContent.trim().toLowerCase();
+
+      if (!href || href === '#' || /^class=/i.test(href)) {
+        const pageMatch = anchor.parentElement?.textContent?.match(/p\.\s*(\d+)/i);
+        const fallback = document.createElement('span');
+        fallback.className = 'citation-missing';
+        fallback.textContent = pageMatch ? `p. ${pageMatch[1]} source` : 'source';
+        anchor.replaceWith(fallback);
+        return;
+      }
+
+      if (!/\.pdf/i.test(href) && label !== 'source' && label !== 'report') return;
+
+      anchor.classList.add('citation-source-link');
+      anchor.setAttribute('target', '_blank');
+      anchor.setAttribute('rel', 'noopener noreferrer');
+      if (label === 'source' || label === 'report') {
+        anchor.textContent = 'source';
+      }
+
+      if (!anchor.closest('.metric-citation')) {
+        const pageText = anchor.previousSibling?.textContent?.match(/p\.\s*\d+/i)?.[0] || '';
+        const wrap = document.createElement('span');
+        wrap.className = 'metric-citation';
+        if (pageText && anchor.previousSibling?.nodeType === Node.TEXT_NODE) {
+          anchor.previousSibling.textContent = anchor.previousSibling.textContent.replace(/p\.\s*\d+\s*$/i, '').trimEnd();
+          wrap.appendChild(document.createTextNode(`${pageText} `));
+        }
+        anchor.parentNode.insertBefore(wrap, anchor);
+        wrap.appendChild(anchor);
+      }
+    });
+  }
+
   // State Variables
-  let sessions = JSON.parse(localStorage.getItem('sustally_sessions')) || [];
+  // Guests: sessionStorage only (temporary per tab — new localhost tab = fresh chat).
+  // Signed-in: localStorage cache + server persistence.
+  const SIGNED_IN_SESSIONS_KEY = 'sustally_sessions';
+  const GUEST_SESSIONS_KEY = 'sustally_guest_sessions';
+
+  let sessions = [];
   let currentSessionId = null;
   let chatHistory = [];
   let isThinking = false;
   let dragCounter = 0;
+  let currentUser = null;
+  let authEnabled = false;
+  let firebaseAuth = null;
+
+  function isSignedIn() {
+    return Boolean(currentUser);
+  }
+
+  function readGuestSessions() {
+    try {
+      return JSON.parse(sessionStorage.getItem(GUEST_SESSIONS_KEY)) || [];
+    } catch {
+      return [];
+    }
+  }
+
+  function readSignedInSessionsCache() {
+    try {
+      return JSON.parse(localStorage.getItem(SIGNED_IN_SESSIONS_KEY)) || [];
+    } catch {
+      return [];
+    }
+  }
+
+  function persistSessionsLocally() {
+    if (isSignedIn()) {
+      localStorage.setItem(SIGNED_IN_SESSIONS_KEY, JSON.stringify(sessions));
+      return;
+    }
+    sessionStorage.setItem(GUEST_SESSIONS_KEY, JSON.stringify(sessions));
+  }
+
+  function clearGuestSessions() {
+    sessionStorage.removeItem(GUEST_SESSIONS_KEY);
+  }
+
+  function resetToGuestFreshChat() {
+    currentUser = null;
+    sessions = [];
+    clearGuestSessions();
+    startNewChat();
+    updateAuthUI();
+    renderSessionList();
+  }
 
   // DOM Elements
   const fileInput = document.getElementById('fileInput');
@@ -42,8 +207,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const chatContainer = document.getElementById('chatContainer');
   const chatInput = document.getElementById('chatInput');
   const sendBtn = document.getElementById('sendBtn');
-  const clearChatBtn = document.getElementById('clearChatBtn');
-  const agentAvatar = document.getElementById('agentAvatar');
   const agentStatusText = document.getElementById('agentStatusText');
   const agentLogsPanel = document.getElementById('agentLogsPanel');
   const closeLogsBtn = document.getElementById('closeLogsBtn');
@@ -58,31 +221,260 @@ document.addEventListener('DOMContentLoaded', () => {
   const reportsTableBody = document.getElementById('reportsTableBody');
   const reportsCountText = document.getElementById('reportsCount');
   const dragDropOverlay = document.getElementById('dragDropOverlay');
+  const confirmDialog = document.getElementById('confirmDialog');
+  const confirmDialogTitle = document.getElementById('confirmDialogTitle');
+  const confirmDialogMessage = document.getElementById('confirmDialogMessage');
+  const confirmDialogCancel = document.getElementById('confirmDialogCancel');
+  const confirmDialogConfirm = document.getElementById('confirmDialogConfirm');
 
   // Mobile navigation selectors
   const menuToggleBtn = document.getElementById('menuToggleBtn');
   const sidebarBackdrop = document.getElementById('sidebarBackdrop');
   const sidebar = document.querySelector('.sidebar');
 
-  // Configuration state loaded from the server
-  let serverConfig = { defaultModel: 'qwen2.5:7b', ollamaHost: 'http://localhost:11434', provider: 'ollama' };
+  // Auth UI elements
+  const signInBtn = document.getElementById('signInBtn');
+  const userProfileMenu = document.getElementById('userProfileMenu');
+  const userProfileBtn = document.getElementById('userProfileBtn');
+  const userProfileName = document.getElementById('userProfileName');
+  const userProfileDropdown = document.getElementById('userProfileDropdown');
+  const userAvatar = document.getElementById('userAvatar');
+  const userAvatarLarge = document.getElementById('userAvatarLarge');
+  const userName = document.getElementById('userName');
+  const userEmail = document.getElementById('userEmail');
+  const signOutBtn = document.getElementById('signOutBtn');
 
-  // Fetch configuration from server on load
-  fetch('/api/config')
-    .then(res => {
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    })
-    .then(data => {
-      serverConfig = data;
-      if (data.provider === 'openrouter') {
-        localStorage.removeItem('ollama_model');
-        localStorage.removeItem('ollama_host');
+  // Configuration state loaded from the server
+  let serverConfig = {
+    defaultModel: 'qwen2.5:7b',
+    ollamaHost: 'http://localhost:11434',
+    provider: 'ollama',
+    firebase: null,
+    authEnabled: false,
+  };
+
+  function closeProfileDropdown() {
+    userProfileDropdown?.classList.add('hidden');
+    userProfileBtn?.setAttribute('aria-expanded', 'false');
+  }
+
+  function updateAuthUI() {
+    if (currentUser) {
+      signInBtn?.classList.add('hidden');
+      userProfileMenu?.classList.remove('hidden');
+
+      const avatarUrl = currentUser.picture || '';
+      const fallbackName = currentUser.name || currentUser.email || 'User';
+
+      if (userAvatar) {
+        userAvatar.src = avatarUrl;
+        userAvatar.alt = fallbackName;
+        userAvatar.onerror = () => {
+          userAvatar.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(fallbackName)}&background=4285F4&color=fff&size=64`;
+        };
       }
-    })
-    .catch(err => {
-      console.warn('Failed to load server configuration. Using default fallbacks:', err);
+      if (userAvatarLarge) {
+        userAvatarLarge.src = avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(fallbackName)}&background=4285F4&color=fff&size=80`;
+        userAvatarLarge.alt = fallbackName;
+      }
+      if (userProfileName) {
+        userProfileName.textContent = currentUser.name || currentUser.email || 'Profile';
+      }
+      if (userName) userName.textContent = currentUser.name || 'Signed in';
+      if (userEmail) userEmail.textContent = currentUser.email || '';
+    } else {
+      userProfileMenu?.classList.add('hidden');
+      closeProfileDropdown();
+      if (userProfileName) {
+        userProfileName.textContent = '';
+      }
+      if (authEnabled) {
+        signInBtn?.classList.remove('hidden');
+      } else {
+        signInBtn?.classList.add('hidden');
+      }
+    }
+  }
+
+  function initFirebaseAuth() {
+    if (!authEnabled || !serverConfig.firebase || typeof firebase === 'undefined') {
+      return;
+    }
+
+    if (!firebase.apps.length) {
+      firebase.initializeApp(serverConfig.firebase);
+    }
+    firebaseAuth = firebase.auth();
+  }
+
+  async function completeSignIn(userPayload) {
+    currentUser = userPayload;
+
+    // Prefer in-tab guest chats; also pick up any legacy localStorage guest history once.
+    const guestSessions = readGuestSessions();
+    const legacyLocal = readSignedInSessionsCache();
+    const toMigrate = guestSessions.length > 0 ? guestSessions : legacyLocal;
+
+    if (toMigrate.length > 0) {
+      const migrateRes = await fetch('/api/sessions/migrate', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessions: toMigrate }),
+      });
+      const migrateData = await migrateRes.json();
+      if (migrateRes.ok && migrateData.success) {
+        sessions = migrateData.sessions || [];
+        persistSessionsLocally();
+      } else {
+        await loadSessionsFromServer();
+      }
+    } else {
+      await loadSessionsFromServer();
+    }
+
+    clearGuestSessions();
+    updateAuthUI();
+    renderSessionList();
+
+    if (sessions.length > 0) {
+      loadSession(sessions[0].id);
+    } else {
+      startNewChat();
+    }
+  }
+
+  async function exchangeFirebaseToken(idToken) {
+    const res = await fetch('/api/auth/firebase', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken }),
     });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || 'Sign-in failed.');
+    }
+    await completeSignIn(data.user);
+  }
+
+  async function signInWithGoogle() {
+    if (!firebaseAuth) {
+      throw new Error('Firebase is not initialized.');
+    }
+
+    signInBtn.disabled = true;
+    try {
+      const provider = new firebase.auth.GoogleAuthProvider();
+      const result = await firebaseAuth.signInWithPopup(provider);
+      const idToken = await result.user.getIdToken();
+      await exchangeFirebaseToken(idToken);
+    } finally {
+      signInBtn.disabled = false;
+    }
+  }
+
+  async function loadSessionsFromServer() {
+    const res = await fetch('/api/sessions', { credentials: 'include' });
+    if (!res.ok) return;
+
+    const data = await res.json();
+    if (data.success && Array.isArray(data.sessions)) {
+      sessions = data.sessions;
+      persistSessionsLocally();
+    }
+  }
+
+  async function refreshAuthState() {
+    try {
+      const res = await fetch('/api/auth/me', { credentials: 'include' });
+      if (!res.ok) {
+        currentUser = null;
+        sessions = readGuestSessions();
+        return;
+      }
+
+      const data = await res.json();
+      if (data.authenticated && data.user) {
+        currentUser = data.user;
+        await loadSessionsFromServer();
+      } else {
+        // Not signed in: temporary tab-only chats (never restore from localStorage).
+        currentUser = null;
+        sessions = readGuestSessions();
+      }
+    } catch (err) {
+      console.warn('Failed to load auth state:', err);
+      currentUser = null;
+      sessions = readGuestSessions();
+    } finally {
+      updateAuthUI();
+    }
+  }
+
+  async function signOut() {
+    try {
+      if (firebaseAuth) {
+        await firebaseAuth.signOut();
+      }
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include',
+      });
+    } catch (err) {
+      console.warn('Sign-out request failed:', err);
+    }
+
+    closeProfileDropdown();
+    // Guest mode: do not keep signed-in history in the sidebar.
+    resetToGuestFreshChat();
+  }
+
+  function setupAuthListeners() {
+    signInBtn?.addEventListener('click', () => {
+      signInWithGoogle().catch((err) => {
+        console.error('Firebase sign-in failed:', err);
+        alert(`Sign-in failed: ${err.message}`);
+      });
+    });
+
+    userProfileBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = !userProfileDropdown?.classList.contains('hidden');
+      if (isOpen) {
+        closeProfileDropdown();
+      } else {
+        userProfileDropdown?.classList.remove('hidden');
+        userProfileBtn?.setAttribute('aria-expanded', 'true');
+      }
+    });
+
+    signOutBtn?.addEventListener('click', () => {
+      signOut();
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!userProfileMenu?.contains(e.target)) {
+        closeProfileDropdown();
+      }
+    });
+  }
+
+  async function persistSessionToServer(session) {
+    if (!currentUser || !session) return;
+
+    await fetch('/api/sessions', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: session.id,
+        title: session.title,
+        history: session.history,
+        timestamp: session.timestamp,
+      }),
+    });
+  }
 
   const getOllamaHost = () => {
     if (serverConfig.provider === 'openrouter') return null;
@@ -115,10 +507,73 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function escapeHtml(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  /** Theme-matched confirm dialog centered in the tab. Returns true if confirmed. */
+  function showConfirmDialog({
+    title = 'Are you sure?',
+    message = 'This cannot be undone.',
+    confirmLabel = 'Delete',
+    cancelLabel = 'Cancel',
+  } = {}) {
+    return new Promise((resolve) => {
+      if (!confirmDialog) {
+        resolve(window.confirm(message));
+        return;
+      }
+
+      confirmDialogTitle.textContent = title;
+      confirmDialogMessage.textContent = message;
+      confirmDialogConfirm.textContent = confirmLabel;
+      confirmDialogCancel.textContent = cancelLabel;
+      confirmDialog.classList.remove('hidden');
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+      confirmDialogConfirm.focus();
+
+      const cleanup = (result) => {
+        confirmDialog.classList.add('hidden');
+        confirmDialogCancel.removeEventListener('click', onCancel);
+        confirmDialogConfirm.removeEventListener('click', onConfirm);
+        confirmDialog.removeEventListener('click', onOverlay);
+        document.removeEventListener('keydown', onKey);
+        resolve(result);
+      };
+
+      const onCancel = () => cleanup(false);
+      const onConfirm = () => cleanup(true);
+      const onOverlay = (e) => {
+        if (e.target === confirmDialog) cleanup(false);
+      };
+      const onKey = (e) => {
+        if (e.key === 'Escape') cleanup(false);
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          cleanup(true);
+        }
+      };
+
+      confirmDialogCancel.addEventListener('click', onCancel);
+      confirmDialogConfirm.addEventListener('click', onConfirm);
+      confirmDialog.addEventListener('click', onOverlay);
+      document.addEventListener('keydown', onKey);
+    });
+  }
+
   // Render Session List in Sidebar
   function renderSessionList() {
     if (sessions.length === 0) {
-      chatHistoryList.innerHTML = `<div class="empty-state"><p>No recent chats</p></div>`;
+      const emptyHint = isSignedIn()
+        ? 'No recent chats'
+        : (authEnabled
+          ? 'Temporary chat — sign in to save history'
+          : 'No recent chats');
+      chatHistoryList.innerHTML = `<div class="empty-state"><p>${emptyHint}</p></div>`;
       return;
     }
 
@@ -129,7 +584,7 @@ document.addEventListener('DOMContentLoaded', () => {
       item.className = `chat-history-item ${session.id === currentSessionId ? 'active' : ''}`;
       item.setAttribute('data-session-id', session.id);
       item.innerHTML = `
-        <span class="chat-history-title" title="${session.title}">${session.title}</span>
+        <span class="chat-history-title" title="${escapeHtml(session.title)}">${escapeHtml(session.title)}</span>
         <span class="chat-history-delete" title="Delete" role="button"><i data-lucide="x"></i></span>
       `;
 
@@ -141,10 +596,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Delete session
       const deleteBtn = item.querySelector('.chat-history-delete');
-      deleteBtn?.addEventListener('click', (e) => {
+      deleteBtn?.addEventListener('click', async (e) => {
         e.stopPropagation();
         e.preventDefault();
-        if (confirm(`Delete conversation "${session.title}"?`)) {
+        const ok = await showConfirmDialog({
+          title: 'Delete conversation?',
+          message: `Delete “${session.title}”? This cannot be undone.`,
+          confirmLabel: 'Delete',
+          cancelLabel: 'Cancel',
+        });
+        if (ok) {
           deleteSession(session.id);
         }
       });
@@ -155,44 +616,49 @@ document.addEventListener('DOMContentLoaded', () => {
     lucide.createIcons();
   }
 
-  // Save/Update Session in localStorage
+  // Save/Update Session (guest: sessionStorage; signed-in: localStorage + server)
   function saveCurrentSession() {
     if (chatHistory.length === 0) return;
 
+    let sessionToPersist = null;
+
     if (!currentSessionId) {
-      // Create new session
       currentSessionId = 'session_' + Date.now();
-      // Auto title from the first user message
       const firstUserMsg = chatHistory.find(m => m.role === 'user');
       let title = 'New Sustainability Analysis';
       if (firstUserMsg) {
-        title = firstUserMsg.content.length > 28 
-          ? firstUserMsg.content.substring(0, 28) + '...' 
+        title = firstUserMsg.content.length > 28
+          ? firstUserMsg.content.substring(0, 28) + '...'
           : firstUserMsg.content;
       }
 
-      const newSession = {
+      sessionToPersist = {
         id: currentSessionId,
         title: title,
         history: chatHistory,
         timestamp: Date.now()
       };
 
-      sessions.unshift(newSession);
+      sessions.unshift(sessionToPersist);
     } else {
-      // Update existing session
       const idx = sessions.findIndex(s => s.id === currentSessionId);
       if (idx !== -1) {
         sessions[idx].history = chatHistory;
         sessions[idx].timestamp = Date.now();
-        // Move to top
         const updatedSession = sessions.splice(idx, 1)[0];
         sessions.unshift(updatedSession);
+        sessionToPersist = updatedSession;
       }
     }
 
-    localStorage.setItem('sustally_sessions', JSON.stringify(sessions));
+    persistSessionsLocally();
     renderSessionList();
+
+    if (isSignedIn() && sessionToPersist) {
+      persistSessionToServer(sessionToPersist).catch((err) => {
+        console.warn('Failed to save session to server:', err);
+      });
+    }
   }
 
   // Load selected session
@@ -219,7 +685,16 @@ document.addEventListener('DOMContentLoaded', () => {
   // Delete session
   function deleteSession(id) {
     sessions = sessions.filter(s => s.id !== id);
-    localStorage.setItem('sustally_sessions', JSON.stringify(sessions));
+    persistSessionsLocally();
+
+    if (isSignedIn()) {
+      fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      }).catch((err) => {
+        console.warn('Failed to delete session on server:', err);
+      });
+    }
 
     if (currentSessionId === id) {
       startNewChat();
@@ -238,18 +713,6 @@ document.addEventListener('DOMContentLoaded', () => {
     agentLogsPanel.classList.add('hidden');
     closeMobileSidebar();
   }
-
-  // Clear Chat History (for the current conversation session)
-  clearChatBtn.addEventListener('click', () => {
-    if (chatHistory.length === 0) return;
-    if (confirm('Are you sure you want to clear this conversation?')) {
-      if (currentSessionId) {
-        deleteSession(currentSessionId);
-      } else {
-        startNewChat();
-      }
-    }
-  });
 
   // Attach elements click events
   newChatBtn.addEventListener('click', startNewChat);
@@ -475,26 +938,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const deleteBtn = tr.querySelector('.delete-report-btn');
       deleteBtn.addEventListener('click', async () => {
-        if (confirm(`Are you sure you want to delete the index for ${report.company} (FY${report.year})?`)) {
-          try {
-            const res = await fetch('/api/delete-report', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                company: report.company,
-                year: report.year,
-                filename: report.filename
-              })
-            });
-            const status = await res.json();
-            if (status.success) {
-              fetchStatus();
-            } else {
-              alert(`Error deleting report: ${status.error}`);
-            }
-          } catch(err) {
-            console.error('Delete error:', err);
+        const ok = await showConfirmDialog({
+          title: 'Delete report index?',
+          message: `Delete the index for ${report.company} (FY${report.year})? This cannot be undone.`,
+          confirmLabel: 'Delete',
+          cancelLabel: 'Cancel',
+        });
+        if (!ok) return;
+        try {
+          const res = await fetch('/api/delete-report', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              company: report.company,
+              year: report.year,
+              filename: report.filename
+            })
+          });
+          const status = await res.json();
+          if (status.success) {
+            fetchStatus();
+          } else {
+            alert(`Error deleting report: ${status.error}`);
           }
+        } catch(err) {
+          console.error('Delete error:', err);
         }
       });
 
@@ -685,8 +1153,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
-    // 3. Render markdown
-    let htmlResult = md.render(cleanedText);
+    // 3. Render markdown (citations converted to hidden-link HTML first)
+    let htmlResult = md.render(prepareCitationsForDisplay(cleanedText));
 
     // 4. Re-inject KaTeX equations
     mathBlocks.forEach(block => {
@@ -694,6 +1162,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     targetElement.innerHTML = htmlResult;
+    enhanceCitationLinks(targetElement);
 
     // 5. Draw charts
     const placeholders = targetElement.querySelectorAll('.chart-placeholder');
@@ -943,6 +1412,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Step state tracking
     let activeStepRow = null;
+    let streamBuffer = '';
 
     function completeActiveStep(isError = false) {
       if (activeStepRow) {
@@ -1022,6 +1492,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 logReasoningStep(data);
               } else if (data.status === 'answer_start') {
                 completeActiveStep();
+                streamBuffer = '';
                 const thoughtContainer = assistantBubble.querySelector('.thought-container');
                 if (thoughtContainer) thoughtContainer.classList.add('hidden-when-answering');
                 const statusLine = assistantBubble.querySelector('.status-line');
@@ -1043,7 +1514,8 @@ document.addEventListener('DOMContentLoaded', () => {
                   assistantBubble.appendChild(contentWrap);
                   targetElement = contentWrap;
                 }
-                targetElement.textContent += data.delta;
+                streamBuffer += data.delta;
+                targetElement.textContent = maskCitationsForStreaming(streamBuffer);
                 chatContainer.scrollTop = chatContainer.scrollHeight;
               } else if (data.status === 'done') {
                 completeActiveStep();
@@ -1121,12 +1593,36 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Initial Boot Sequence
-  renderSessionList();
-  
-  // If there are saved sessions, load the latest one automatically
-  if (sessions.length > 0) {
-    loadSession(sessions[0].id);
-  } else {
-    startNewChat();
+  async function initializeApp() {
+    try {
+      const configRes = await fetch('/api/config');
+      if (configRes.ok) {
+        serverConfig = await configRes.json();
+        authEnabled = Boolean(serverConfig.authEnabled && serverConfig.firebase);
+        if (serverConfig.provider === 'openrouter') {
+          localStorage.removeItem('ollama_model');
+          localStorage.removeItem('ollama_host');
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load server configuration. Using default fallbacks:', err);
+    }
+
+    setupAuthListeners();
+    initFirebaseAuth();
+    await refreshAuthState();
+
+    renderSessionList();
+
+    // Signed-in: restore last chat from server cache.
+    // Guest: restore only if this same browser tab still has temporary sessionStorage history.
+    // Opening a new localhost tab always starts with an empty guest chat.
+    if (sessions.length > 0) {
+      loadSession(sessions[0].id);
+    } else {
+      startNewChat();
+    }
   }
+
+  initializeApp();
 });

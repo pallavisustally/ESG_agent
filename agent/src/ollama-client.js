@@ -99,11 +99,68 @@ export function getOllamaConfig(overrides = {}) {
 function toOpenRouterMessages(messages) {
   return messages.map((msg) => {
     const out = { role: msg.role, content: msg.content ?? '' };
-    if (msg.tool_calls?.length) out.tool_calls = msg.tool_calls;
+    if (msg.tool_calls?.length) {
+      out.tool_calls = msg.tool_calls;
+      if (!out.content) out.content = null;
+    }
     if (msg.tool_call_id) out.tool_call_id = msg.tool_call_id;
     if (msg.name) out.name = msg.name;
     return out;
   });
+}
+
+/** OpenAI requires every assistant tool_call_id to have a matching tool response. */
+function sanitizeToolCallPairing(messages) {
+  const out = [...messages];
+  const insertions = [];
+
+  for (let i = 0; i < out.length; i += 1) {
+    const msg = out[i];
+    if (msg.role !== 'assistant' || !msg.tool_calls?.length) continue;
+
+    const ids = msg.tool_calls.map((tc) => tc.id).filter(Boolean);
+    if (!ids.length) continue;
+
+    const responded = new Set();
+    for (let j = i + 1; j < out.length; j += 1) {
+      const next = out[j];
+      if (next.role === 'tool' && next.tool_call_id) responded.add(next.tool_call_id);
+      else if (next.role === 'assistant' || next.role === 'user') break;
+    }
+
+    const stubs = ids
+      .filter((id) => !responded.has(id))
+      .map((id) => ({
+        role: 'tool',
+        tool_call_id: id,
+        content: JSON.stringify({ error: 'Tool call was deduplicated or skipped.' }),
+      }));
+
+    if (stubs.length) insertions.push({ index: i + 1, stubs });
+  }
+
+  for (const { index, stubs } of insertions.sort((a, b) => b.index - a.index)) {
+    out.splice(index, 0, ...stubs);
+  }
+
+  return out;
+}
+
+function dedupeToolCalls(toolCalls = []) {
+  const seen = new Set();
+  const unique = [];
+
+  for (const call of toolCalls) {
+    const args = typeof call.function?.arguments === 'string'
+      ? call.function.arguments
+      : JSON.stringify(call.function?.arguments ?? {});
+    const key = `${call.function?.name}:${args}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(call);
+  }
+
+  return unique;
 }
 
 function mergeStreamingToolCalls(accumulated, deltaCalls) {
@@ -222,7 +279,7 @@ async function fetchOpenAIResponse(body, signal) {
 async function callCompatibleChat({ fetchResponse, providerName, model, fallbackModels = [], messages, tools, options, stream, onToken, signal }) {
   const body = {
     model,
-    messages: toOpenRouterMessages(messages),
+    messages: toOpenRouterMessages(sanitizeToolCallPairing(messages)),
     stream: Boolean(stream),
     temperature: options?.temperature,
     max_tokens: options?.num_predict,

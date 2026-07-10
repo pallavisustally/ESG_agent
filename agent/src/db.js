@@ -3,7 +3,7 @@ import fs from 'fs';
 import dotenv from 'dotenv';
 import { resolveDbPath } from './paths.js';
 import { lookupNseMetadata } from './report-sources.js';
-import { extractMetricValuesFromRow, findMetricPages } from './page-index.js';
+import { extractMetricValuesFromRow, findMetricPagesResult, isPdfMarkedUnavailable, PDF_UNAVAILABLE_MARKER } from './page-index.js';
 
 dotenv.config();
 
@@ -153,7 +153,10 @@ async function initDb(db) {
       water_intensity REAL,
       waste_intensity REAL,
       female_employee_count REAL,
+      total_employee_count REAL,
       female_employee_share REAL,
+      female_board_count REAL,
+      total_board_count REAL,
       female_board_share REAL,
       safety_ltifr REAL,
       water_discharge_recycled REAL,
@@ -174,6 +177,9 @@ async function initDb(db) {
   `);
 
   await ensureReportSourceColumns(db);
+
+  const { initUserChatTables } = await import('./user-chats.js');
+  await initUserChatTables(db);
 }
 
 async function ensureReportSourceColumns(db) {
@@ -183,6 +189,9 @@ async function ensureReportSourceColumns(db) {
     ['pdf_url', 'TEXT'],
     ['xbrl_url', 'TEXT'],
     ['metric_pages_json', 'TEXT'],
+    ['total_employee_count', 'REAL'],
+    ['female_board_count', 'REAL'],
+    ['total_board_count', 'REAL'],
   ];
 
   for (const [name, type] of additions) {
@@ -190,6 +199,14 @@ async function ensureReportSourceColumns(db) {
       await db.exec(`ALTER TABLE reports ADD COLUMN ${name} ${type}`);
     }
   }
+
+  await db.run(`
+    UPDATE reports
+    SET total_employee_count = ROUND(female_employee_count / (female_employee_share / 100.0), 0)
+    WHERE total_employee_count IS NULL
+      AND female_employee_count IS NOT NULL
+      AND female_employee_share > 0
+  `);
 }
 
 export async function syncReportSourceUrls(company, year, filename) {
@@ -215,7 +232,8 @@ export async function getReportSourceRow(company, year) {
             energy_consumption, renewable_energy_share, water_consumption,
             water_withdrawal, waste_generated, total_revenue, emissions_intensity,
             energy_intensity, water_intensity, waste_intensity,
-            female_employee_share, female_board_share, safety_ltifr
+            female_employee_count, total_employee_count, female_employee_share,
+            female_board_count, total_board_count, female_board_share, safety_ltifr
      FROM reports WHERE company = ? AND year = ?`;
 
   let row = await db.get(selectSql, [company, year]);
@@ -227,6 +245,36 @@ export async function getReportSourceRow(company, year) {
   }
 
   return row;
+}
+
+const SHARE_METRICS_TO_REFRESH = ['female_employee_share', 'female_board_share', 'renewable_energy_share'];
+
+function stripUnavailableMarker(pages) {
+  if (!pages || typeof pages !== 'object') return {};
+  const out = { ...pages };
+  delete out[PDF_UNAVAILABLE_MARKER];
+  return out;
+}
+
+/** For citations: hide pdf_url when the PDF cannot be indexed. */
+function rowForCitations(row, pages, pdfUnavailable) {
+  if (!row) return row;
+  if (pdfUnavailable || isPdfMarkedUnavailable(pages)) {
+    return {
+      ...row,
+      pdf_url: null,
+      metric_pages_json: null,
+      pdf_unavailable: true,
+    };
+  }
+  const cleanPages = stripUnavailableMarker(pages);
+  if (Object.keys(cleanPages).length === 0) {
+    return { ...row, metric_pages_json: row.metric_pages_json };
+  }
+  return {
+    ...row,
+    metric_pages_json: JSON.stringify(cleanPages),
+  };
 }
 
 export async function ensureMetricPagesIndexed(company, year) {
@@ -242,27 +290,98 @@ export async function ensureMetricPagesIndexed(company, year) {
     }
   }
 
-  // Treat empty {} as "not yet indexed" so failed downloads can be retried later.
-  if (existingPages && typeof existingPages === 'object' && Object.keys(existingPages).length > 0) {
-    return row;
+  // Previously failed to download/index — do not retry; no page citations.
+  if (isPdfMarkedUnavailable(existingPages)) {
+    return rowForCitations(row, existingPages, true);
   }
 
   const metricValues = extractMetricValuesFromRow(row);
   if (Object.keys(metricValues).length === 0) return row;
 
-  const pages = await findMetricPages(row.pdf_url, metricValues);
-  // Only persist when we found at least one page (avoid locking in empty results from 404s).
-  if (Object.keys(pages).length === 0) {
-    return { ...row, metric_pages_json: row.metric_pages_json };
+  let pages = existingPages && typeof existingPages === 'object' ? stripUnavailableMarker(existingPages) : {};
+  let needsPersist = false;
+  let pdfUnavailable = false;
+
+  const hasIndexedPages = Object.keys(pages).length > 0;
+
+  // Re-score share metrics only when we already have a usable PDF index.
+  if (hasIndexedPages) {
+    for (const metric of SHARE_METRICS_TO_REFRESH) {
+      if (metricValues[metric] == null) continue;
+      const { pages: refreshed, unavailable } = await findMetricPagesResult(
+        row.pdf_url,
+        { [metric]: metricValues[metric] },
+        row,
+      );
+      if (unavailable) {
+        pdfUnavailable = true;
+        break;
+      }
+      if (refreshed[metric] && pages[metric] !== refreshed[metric]) {
+        pages[metric] = refreshed[metric];
+        needsPersist = true;
+      }
+    }
   }
 
-  const db = await getDb();
-  await db.run(
-    'UPDATE reports SET metric_pages_json = ? WHERE company = ? AND year = ?',
-    [JSON.stringify(pages), company, year],
-  );
+  // First-time full index when nothing is stored yet.
+  if (!pdfUnavailable && !hasIndexedPages) {
+    const { pages: indexed, unavailable } = await findMetricPagesResult(row.pdf_url, metricValues, row);
+    if (unavailable) {
+      pdfUnavailable = true;
+    } else {
+      pages = indexed;
+      needsPersist = Object.keys(pages).length > 0;
+    }
+  }
 
-  return { ...row, metric_pages_json: JSON.stringify(pages) };
+  if (pdfUnavailable) {
+    const db = await getDb();
+    const markerJson = JSON.stringify({ [PDF_UNAVAILABLE_MARKER]: true });
+    await db.run(
+      'UPDATE reports SET metric_pages_json = ? WHERE company = ? AND year = ?',
+      [markerJson, company, year],
+    );
+    return rowForCitations(row, { [PDF_UNAVAILABLE_MARKER]: true }, true);
+  }
+
+  if (needsPersist && Object.keys(pages).length > 0) {
+    const db = await getDb();
+    await db.run(
+      'UPDATE reports SET metric_pages_json = ? WHERE company = ? AND year = ?',
+      [JSON.stringify(pages), company, year],
+    );
+    return rowForCitations({ ...row, metric_pages_json: JSON.stringify(pages) }, pages, false);
+  }
+
+  if (hasIndexedPages) {
+    return rowForCitations({ ...row, metric_pages_json: JSON.stringify(pages) }, pages, false);
+  }
+
+  // PDF URL exists but indexing found no pages — still no citations.
+  return rowForCitations(row, pages, false);
+}
+
+const PDF_INDEX_CONCURRENCY = parseInt(process.env.PDF_INDEX_CONCURRENCY, 10) || 3;
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    () => worker(),
+  );
+  await Promise.all(workers);
+  return results;
 }
 
 export async function getSourceRowsForReports(rows) {
@@ -274,14 +393,13 @@ export async function getSourceRowsForReports(rows) {
     unique.set(`${row.company}|${row.year}`, { company: row.company, year: row.year });
   }
 
-  await Promise.all(
-    [...unique.values()].map(async ({ company, year }) => {
-      const sourceRow = await ensureMetricPagesIndexed(company, year);
-      if (sourceRow) {
-        sourceRowsByKey.set(`${company}|${year}`, sourceRow);
-      }
-    }),
-  );
+  const uniqueRows = [...unique.values()];
+  await mapWithConcurrency(uniqueRows, PDF_INDEX_CONCURRENCY, async ({ company, year }) => {
+    const sourceRow = await ensureMetricPagesIndexed(company, year);
+    if (sourceRow) {
+      sourceRowsByKey.set(`${company}|${year}`, sourceRow);
+    }
+  });
 
   return sourceRowsByKey;
 }
@@ -327,7 +445,10 @@ export async function insertReport(
   const water_intensity = metrics.water_intensity ?? null;
   const waste_intensity = metrics.waste_intensity ?? null;
   const female_employee_count = metrics.female_employee_count ?? null;
+  const total_employee_count = metrics.total_employee_count ?? null;
   const female_employee_share = metrics.female_employee_share ?? null;
+  const female_board_count = metrics.female_board_count ?? null;
+  const total_board_count = metrics.total_board_count ?? null;
   const female_board_share = metrics.female_board_share ?? null;
   const safety_ltifr = metrics.safety_ltifr ?? null;
   const water_discharge_recycled = metrics.water_discharge_recycled ?? null;
@@ -351,12 +472,13 @@ export async function insertReport(
       waste_generated, waste_unit,
       sector, industry, total_revenue,
       emissions_intensity, energy_intensity, water_intensity, waste_intensity,
-      female_employee_count, female_employee_share, female_board_share,
+      female_employee_count, total_employee_count, female_employee_share,
+      female_board_count, total_board_count, female_board_share,
       safety_ltifr, water_discharge_recycled, waste_recovered_recycled,
       ghg_reduction_projects, waste_management_practices, zero_liquid_discharge_details,
       data_json
     ) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(company, year) DO UPDATE SET 
       filename = excluded.filename,
       is_custom = excluded.is_custom,
@@ -385,7 +507,10 @@ export async function insertReport(
       water_intensity = excluded.water_intensity,
       waste_intensity = excluded.waste_intensity,
       female_employee_count = excluded.female_employee_count,
+      total_employee_count = excluded.total_employee_count,
       female_employee_share = excluded.female_employee_share,
+      female_board_count = excluded.female_board_count,
+      total_board_count = excluded.total_board_count,
       female_board_share = excluded.female_board_share,
       safety_ltifr = excluded.safety_ltifr,
       water_discharge_recycled = excluded.water_discharge_recycled,
@@ -408,7 +533,8 @@ export async function insertReport(
       waste, waste_unit,
       sector, industry, total_revenue,
       emissions_intensity, energy_intensity, water_intensity, waste_intensity,
-      female_employee_count, female_employee_share, female_board_share,
+      female_employee_count, total_employee_count, female_employee_share,
+      female_board_count, total_board_count, female_board_share,
       safety_ltifr, water_discharge_recycled, waste_recovered_recycled,
       ghg_reduction_projects, waste_management_practices, zero_liquid_discharge_details,
       dataJson

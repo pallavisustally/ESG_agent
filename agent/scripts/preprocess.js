@@ -271,6 +271,7 @@ function normalizeReport(parsedXml, filePath = '') {
     const femaleEmp2 = getMetricVal('TotalNumberOfEmployeesOrWorkersForMembership', empFemaleCtx) || getMetricVal('TotalNumberOfEmployeesOrWorkersForPerformanceAndCareerDevelopment', empFemaleCtx);
     
     if (totalEmp && totalEmp.value > 0) {
+      metrics.total_employee_count = totalEmp.value;
       if (femaleEmp2) {
         metrics.female_employee_count = femaleEmp2.value;
         metrics.female_employee_share = Math.round((femaleEmp2.value / totalEmp.value) * 10000) / 100;
@@ -284,14 +285,20 @@ function normalizeReport(parsedXml, filePath = '') {
 
     // Female Board Directors Share
     const femaleBoard = getMetricVal('PercentageOfFemaleBoardOfDirectors', context);
+    const totalBoard = getMetricVal('TotalNumberOfBoardOfDirectors', context);
+    const femBoard = getMetricVal('NumberOfFemaleBoardOfDirectors', context);
+    if (totalBoard?.value > 0) {
+      metrics.total_board_count = totalBoard.value;
+    }
+    if (femBoard?.value >= 0) {
+      metrics.female_board_count = femBoard.value;
+    }
     if (femaleBoard) {
-      metrics.female_board_share = femaleBoard.value * 100;
-    } else {
-      const totalBoard = getMetricVal('TotalNumberOfBoardOfDirectors', context);
-      const femBoard = getMetricVal('NumberOfFemaleBoardOfDirectors', context);
-      if (totalBoard && totalBoard.value > 0 && femBoard) {
-        metrics.female_board_share = Math.round((femBoard.value / totalBoard.value) * 10000) / 100;
-      }
+      const raw = femaleBoard.value;
+      // XBRL may store 0.25 (fraction) or 25 (percent) — normalize to percent.
+      metrics.female_board_share = raw <= 1 ? Math.round(raw * 10000) / 100 : Math.round(raw * 100) / 100;
+    } else if (totalBoard?.value > 0 && femBoard) {
+      metrics.female_board_share = Math.round((femBoard.value / totalBoard.value) * 10000) / 100;
     }
 
     // Safety LTIFR

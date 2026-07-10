@@ -14,19 +14,28 @@
     "compare:models": "node agent/scripts/compare_models.js",
     "compare:gpt-deepseek": "node agent/scripts/compare_gpt_deepseek.js --fast",
     "test:citations": "node agent/scripts/test_citations.js",
+    "test:all": "node agent/scripts/run_all_tests.js",
+    "test:all:quick": "node agent/scripts/run_all_tests.js --quick",
+    "verify:pdf-sources": "node agent/scripts/verify_pdf_sources.js",
     "dev": "node agent/src/server.js",
     "ui": "node agent/src/server.js",
     "start": "node agent/src/server.js"
   },
   "dependencies": {
+    "cookie-parser": "^1.4.7",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "fast-xml-parser": "^5.9.3",
+    "firebase-admin": "^14.1.0",
+    "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
     "pdfjs-dist": "^4.10.38",
     "puppeteer": "^25.1.0",
     "sql.js": "^1.14.1",
     "sqlite": "^5.1.1",
     "sqlite3": "^6.0.1"
+  },
+  "overrides": {
+    "jose": "5.9.6"
   }
 }
