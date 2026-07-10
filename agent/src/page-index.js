@@ -7,7 +7,9 @@ import { CITABLE_METRICS } from './report-sources.js';
 
 const PDF_CACHE_DIR = process.env.PDF_CACHE_DIR
   ? path.resolve(process.env.PDF_CACHE_DIR)
-  : resolveFromProject('data', 'pdf_cache');
+  : (process.env.VERCEL
+    ? '/tmp/pdf_cache'
+    : resolveFromProject('data', 'pdf_cache'));
 
 const PAGE_TEXT_CACHE_MAX = parseInt(process.env.PDF_PAGE_TEXT_CACHE_MAX, 10) || 20;
 const pageTextCache = new Map();

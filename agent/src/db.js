@@ -300,52 +300,63 @@ export async function ensureMetricPagesIndexed(company, year) {
 
   let pages = existingPages && typeof existingPages === 'object' ? stripUnavailableMarker(existingPages) : {};
   let needsPersist = false;
-  let pdfUnavailable = false;
 
   const hasIndexedPages = Object.keys(pages).length > 0;
 
-  // Re-score share metrics only when we already have a usable PDF index.
+  // Already have page numbers from a prior index (e.g. local preprocess / committed DB).
+  // On Vercel, NSE PDF downloads often fail — never wipe good pages just because a refresh failed.
   if (hasIndexedPages) {
-    for (const metric of SHARE_METRICS_TO_REFRESH) {
-      if (metricValues[metric] == null) continue;
-      const { pages: refreshed, unavailable } = await findMetricPagesResult(
-        row.pdf_url,
-        { [metric]: metricValues[metric] },
-        row,
-      );
-      if (unavailable) {
-        pdfUnavailable = true;
-        break;
+    // Optional best-effort share-metric refresh; ignore download failures.
+    try {
+      for (const metric of SHARE_METRICS_TO_REFRESH) {
+        if (metricValues[metric] == null) continue;
+        const { pages: refreshed, unavailable } = await findMetricPagesResult(
+          row.pdf_url,
+          { [metric]: metricValues[metric] },
+          row,
+        );
+        if (unavailable) break;
+        if (refreshed[metric] && pages[metric] !== refreshed[metric]) {
+          pages[metric] = refreshed[metric];
+          needsPersist = true;
+        }
       }
-      if (refreshed[metric] && pages[metric] !== refreshed[metric]) {
-        pages[metric] = refreshed[metric];
-        needsPersist = true;
-      }
+    } catch {
+      // Keep existing pages.
     }
+
+    if (needsPersist && Object.keys(pages).length > 0) {
+      const db = await getDb();
+      await db.run(
+        'UPDATE reports SET metric_pages_json = ? WHERE company = ? AND year = ?',
+        [JSON.stringify(pages), company, year],
+      );
+      return rowForCitations({ ...row, metric_pages_json: JSON.stringify(pages) }, pages, false);
+    }
+
+    return rowForCitations({ ...row, metric_pages_json: JSON.stringify(pages) }, pages, false);
   }
 
   // First-time full index when nothing is stored yet.
-  if (!pdfUnavailable && !hasIndexedPages) {
-    const { pages: indexed, unavailable } = await findMetricPagesResult(row.pdf_url, metricValues, row);
-    if (unavailable) {
-      pdfUnavailable = true;
-    } else {
-      pages = indexed;
-      needsPersist = Object.keys(pages).length > 0;
+  const { pages: indexed, unavailable } = await findMetricPagesResult(row.pdf_url, metricValues, row);
+  if (unavailable) {
+    // Do not persist unavailable permanently on ephemeral hosts — just skip citations this request.
+    // (Persisting would poison /tmp DB copies and hide citations for the rest of the instance life.)
+    if (!process.env.VERCEL) {
+      const db = await getDb();
+      const markerJson = JSON.stringify({ [PDF_UNAVAILABLE_MARKER]: true });
+      await db.run(
+        'UPDATE reports SET metric_pages_json = ? WHERE company = ? AND year = ?',
+        [markerJson, company, year],
+      );
     }
-  }
-
-  if (pdfUnavailable) {
-    const db = await getDb();
-    const markerJson = JSON.stringify({ [PDF_UNAVAILABLE_MARKER]: true });
-    await db.run(
-      'UPDATE reports SET metric_pages_json = ? WHERE company = ? AND year = ?',
-      [markerJson, company, year],
-    );
     return rowForCitations(row, { [PDF_UNAVAILABLE_MARKER]: true }, true);
   }
 
-  if (needsPersist && Object.keys(pages).length > 0) {
+  pages = indexed;
+  needsPersist = Object.keys(pages).length > 0;
+
+  if (needsPersist) {
     const db = await getDb();
     await db.run(
       'UPDATE reports SET metric_pages_json = ? WHERE company = ? AND year = ?',
@@ -354,11 +365,6 @@ export async function ensureMetricPagesIndexed(company, year) {
     return rowForCitations({ ...row, metric_pages_json: JSON.stringify(pages) }, pages, false);
   }
 
-  if (hasIndexedPages) {
-    return rowForCitations({ ...row, metric_pages_json: JSON.stringify(pages) }, pages, false);
-  }
-
-  // PDF URL exists but indexing found no pages — still no citations.
   return rowForCitations(row, pages, false);
 }
 
