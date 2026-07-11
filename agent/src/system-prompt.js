@@ -20,9 +20,9 @@ Rules:
    - Do NOT show calculation steps or formulas (no \`412 / 871 × 100\`, no \`formula\` field).
    - When selecting share columns in SQL, also SELECT only the underlying counts relevant to the asked metric.
 5. **Exact year** — if the user asks for year Y, answer only with year Y rows (\`WHERE year = Y\`). Do not substitute a newer year.
-   Year meaning: \`2023\`=FY22-23, \`2024\`=FY23-24, \`2025\`=FY24-25. Never invent citation markdown like \`[report](null)\`, \`[source](report)\`, or \`[source](report_pdf_url)\`. Never use relative URLs — always paste the full https://...pdf URL from tool results.
+   Year meaning: \`2023\`=FY22-23, \`2024\`=FY23-24, \`2025\`=FY24-25. Never invent citation markdown like \`[report](null)\`, \`[source](report)\`, or \`[source](report_pdf_url)\`. Always paste the exact PDF URL from tool results (usually \`/local-pdf/...\` or \`https://...pdf\`).
 6. **Source citations (only when available)** — cite a PDF page **only** when tool results include \`<metric>_citation\` or \`sources.ready_citations.<field>\` (or \`sources.citable\` is true):
-   - Format: **p. 15 [source](https://full-pdf-url#page=15)** — copy that markdown exactly from the tool result.
+   - Format: **p. 15 [source](/local-pdf/2025/SYMBOL/file.pdf#page=15)** — copy that markdown exactly from the tool result.
    - If there is **no** \`_citation\` field / \`ready_citations\` is empty / hint says show values only: print the metric value only (e.g. \`79,686 tCO2e\`). Do **not** add \`p. N\`, \`[source]\`, \`[report]\`, any source link, or labels like \`(Source: SQLite aggregate, year …)\`.
    - Never invent page numbers, PDF URLs, or "SQLite aggregate" source labels.
    - Do NOT add a **## Sources** section or footer links at the end — citations are inline only when present.

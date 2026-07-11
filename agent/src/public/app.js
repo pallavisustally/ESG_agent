@@ -77,6 +77,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     out = out.replace(/\n##\s*Sources[\s\S]*$/i, '');
     out = out.replace(/^\s*-\s*https?:\/\/\S+\.pdf\S*\s*$/gim, '');
+    out = out.replace(/^\s*-\s*\/local-pdf\/\S+\.pdf\S*\s*$/gim, '');
 
     // Protect href values, then strip only bare PDF URLs in plain text
     const hrefSlots = [];
@@ -86,6 +87,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return `href="${token}"`;
     });
     out = out.replace(/(?<![="'\[(])\bhttps?:\/\/[^\s<>\)]+\.pdf[^\s<>\)]*/gi, '');
+    out = out.replace(/(?<![="'\[(])\/local-pdf\/[^\s<>\)]+\.pdf[^\s<>\)]*/gi, '');
     hrefSlots.forEach((url, i) => {
       out = out.split(`__CITE_HREF_${i}__`).join(url);
     });
@@ -101,6 +103,7 @@ document.addEventListener('DOMContentLoaded', () => {
       .replace(/\[source\]\([^)]*\)?/gi, 'source')
       .replace(/\[report\]\([^)]*\)?/gi, 'source')
       .replace(/https?:\/\/\S+\.pdf\S*/gi, '')
+      .replace(/\/local-pdf\/\S+\.pdf\S*/gi, '')
       .replace(/\n##\s*Sources[\s\S]*$/i, '');
   }
 

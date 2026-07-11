@@ -3,8 +3,11 @@
  *
  * This script fetches the complete corporate filings index from the NSE API
  * from 01-01-2020 up to today, using Puppeteer to handle session cookies,
- * and then downloads the raw XML/XBRL filings directly to the `data/xbrl/`
- * directory, checking for duplicates.
+ * and then downloads:
+ *   - raw XML/XBRL filings → data/xbrl/YYYY/SYMBOL/
+ *   - PDF attachments (when present) → data/pdf/YYYY/SYMBOL/
+ *
+ * PDFs are stored only; they are not parsed here.
  *
  * Usage:
  *   node scripts/download_nse_reports.js [limit]
@@ -17,7 +20,7 @@ import puppeteer from "puppeteer";
 import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
-import { resolveXbrlDir } from "../src/paths.js";
+import { resolveXbrlDir, resolvePdfDir } from "../src/paths.js";
 
 dotenv.config();
 
@@ -48,7 +51,9 @@ async function launchBrowser() {
     console.log(`Using browser: ${executablePath}`);
     options.executablePath = executablePath;
   } else {
-    console.log("Using Puppeteer-managed Chrome (run: npm run install-browser if missing)");
+    console.log(
+      "Using Puppeteer-managed Chrome (run: npm run install-browser if missing)",
+    );
   }
 
   try {
@@ -64,7 +69,7 @@ async function launchBrowser() {
 }
 
 // Parse download limit from environment or command line args (default to 20)
-let DOWNLOAD_LIMIT = parseInt(process.env.NSE_DOWNLOAD_LIMIT, 50) || 100;
+let DOWNLOAD_LIMIT = parseInt(process.env.NSE_DOWNLOAD_LIMIT, 50) || 2000;
 if (process.argv[2] === "all") {
   DOWNLOAD_LIMIT = Infinity;
 } else if (process.argv[2] !== undefined) {
@@ -86,14 +91,34 @@ const getTodayDateStr = () => {
 const FROM_DATE = process.env.NSE_FROM_DATE || "01-01-2020";
 const TO_DATE = getTodayDateStr();
 const API_URL = `https://www.nseindia.com/api/corporate-bussiness-sustainabilitiy?from_date=${FROM_DATE}&to_date=${TO_DATE}`;
-const TARGET_DIR = resolveXbrlDir();
+const XBRL_DIR = resolveXbrlDir();
+const PDF_DIR = resolvePdfDir();
 
-// Ensure directory exists
-if (!fs.existsSync(TARGET_DIR)) {
-  fs.mkdirSync(TARGET_DIR, { recursive: true });
+for (const dir of [XBRL_DIR, PDF_DIR]) {
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isPdfUrl(url) {
+  if (!url || typeof url !== "string") return false;
+  try {
+    const pathname = new URL(url).pathname.toLowerCase();
+    return pathname.endsWith(".pdf");
+  } catch {
+    return url.toLowerCase().split("?")[0].endsWith(".pdf");
+  }
+}
+
+function filenameFromUrl(url) {
+  try {
+    return path.basename(new URL(url).pathname);
+  } catch {
+    return path.basename(String(url).split("?")[0]);
+  }
+}
 
 async function fetchFilingsIndex() {
   console.log(`Launching headless browser to fetch NSE filings index...`);
@@ -159,81 +184,127 @@ async function main() {
     fs.writeFileSync(metaPath, JSON.stringify(filings, null, 2));
     console.log(`✓ Saved index metadata to: ${metaPath}`);
 
-    // 2. Filter filings that have XBRL links and are not already downloaded
-    const pendingDownloads = [];
-    let existingCount = 0;
+    // 2. Queue filings that still need XBRL and/or PDF (same year/symbol layout)
+    const pendingFilings = [];
+    let existingXbrlCount = 0;
+    let existingPdfCount = 0;
+    let filingsWithPdf = 0;
+
     filings.forEach((f) => {
+      const year = f.fyTo || "Unknown";
+      const symbol = (f.symbol || "Custom").toUpperCase();
+      const company = f.companyName;
+      const jobs = [];
+
       if (f.xbrlFile && f.xbrlFile.endsWith(".xml")) {
-        const filename = path.basename(f.xbrlFile);
-        const year = f.fyTo || "Unknown";
-        const symbol = (f.symbol || "Custom").toUpperCase();
-        const checkPath = path.join(TARGET_DIR, String(year), symbol, filename);
+        const filename = filenameFromUrl(f.xbrlFile);
+        const checkPath = path.join(XBRL_DIR, String(year), symbol, filename);
 
         if (fs.existsSync(checkPath)) {
-          existingCount++;
+          existingXbrlCount++;
         } else {
-          pendingDownloads.push({
+          jobs.push({
+            kind: "xbrl",
             url: f.xbrlFile,
-            filename: filename,
-            company: f.companyName,
-            year: year,
-            symbol: symbol,
+            filename,
+            targetDir: XBRL_DIR,
           });
         }
       }
+
+      if (isPdfUrl(f.attachmentFile)) {
+        filingsWithPdf++;
+        const filename = filenameFromUrl(f.attachmentFile);
+        const checkPath = path.join(PDF_DIR, String(year), symbol, filename);
+
+        if (fs.existsSync(checkPath)) {
+          existingPdfCount++;
+        } else {
+          jobs.push({
+            kind: "pdf",
+            url: f.attachmentFile,
+            filename,
+            targetDir: PDF_DIR,
+          });
+        }
+      }
+
+      if (jobs.length > 0) {
+        pendingFilings.push({ company, year, symbol, jobs });
+      }
     });
-    console.log(
-      `Found ${existingCount} files already present in structured directories.`,
+
+    const pendingXbrl = pendingFilings.reduce(
+      (n, f) => n + f.jobs.filter((j) => j.kind === "xbrl").length,
+      0,
+    );
+    const pendingPdf = pendingFilings.reduce(
+      (n, f) => n + f.jobs.filter((j) => j.kind === "pdf").length,
+      0,
     );
 
     console.log(
-      `Total new filings available to download: ${pendingDownloads.length}`,
+      `Found ${existingXbrlCount} XBRL and ${existingPdfCount} PDF files already present.`,
+    );
+    console.log(`Filings with PDF attachment: ${filingsWithPdf}`);
+    console.log(
+      `Filings needing download: ${pendingFilings.length} (${pendingXbrl} XBRL, ${pendingPdf} PDF files)`,
     );
 
-    if (pendingDownloads.length === 0) {
+    if (pendingFilings.length === 0) {
       console.log(
-        "All available files have already been downloaded! No new reports to fetch.",
+        "All available XBRL and PDF files have already been downloaded! Nothing new to fetch.",
       );
       return;
     }
 
-    // 3. Download files with a limit to avoid rate-limiting/overwhelming connections
-    const targetDownloadCount = Math.min(
-      pendingDownloads.length,
-      DOWNLOAD_LIMIT,
-    );
+    // 3. Download per filing (XBRL + PDF together) with a limit
+    const targetFilingCount = Math.min(pendingFilings.length, DOWNLOAD_LIMIT);
     console.log(
-      `Starting download of ${targetDownloadCount} new files (Limit: ${DOWNLOAD_LIMIT})...\n`,
+      `Starting download for ${targetFilingCount} filings (Limit: ${DOWNLOAD_LIMIT})...\n`,
     );
 
-    for (let i = 0; i < targetDownloadCount; i++) {
-      const item = pendingDownloads[i];
-      const destDir = path.join(
-        TARGET_DIR,
-        String(item.year),
-        String(item.symbol).toUpperCase(),
-      );
-      if (!fs.existsSync(destDir)) {
-        fs.mkdirSync(destDir, { recursive: true });
-      }
-      const destPath = path.join(destDir, item.filename);
+    let downloadedXbrl = 0;
+    let downloadedPdf = 0;
+    let failed = 0;
+    let fileIndex = 0;
+    const totalFiles = pendingFilings
+      .slice(0, targetFilingCount)
+      .reduce((n, f) => n + f.jobs.length, 0);
 
+    for (let i = 0; i < targetFilingCount; i++) {
+      const filing = pendingFilings[i];
       console.log(
-        `[${i + 1}/${targetDownloadCount}] Downloading: ${item.company} (${item.year})`,
+        `[Filing ${i + 1}/${targetFilingCount}] ${filing.company} (${filing.year} / ${filing.symbol})`,
       );
-      console.log(`  URL:  ${item.url}`);
 
-      try {
-        await downloadFile(item.url, destPath);
-        console.log(
-          `  ✓ Saved to: ${item.filename} (${(fs.statSync(destPath).size / 1024).toFixed(2)} KB)`,
+      for (const job of filing.jobs) {
+        fileIndex++;
+        const destDir = path.join(
+          job.targetDir,
+          String(filing.year),
+          String(filing.symbol).toUpperCase(),
         );
-      } catch (err) {
-        console.error(`  ✗ Failed to download:`, err.message);
-      }
+        if (!fs.existsSync(destDir)) {
+          fs.mkdirSync(destDir, { recursive: true });
+        }
+        const destPath = path.join(destDir, job.filename);
+        const label = job.kind === "pdf" ? "PDF" : "XBRL";
 
-      // Delay between requests to be polite
-      if (i < targetDownloadCount - 1) {
+        console.log(`  [${fileIndex}/${totalFiles}] ${label}: ${job.url}`);
+
+        try {
+          await downloadFile(job.url, destPath);
+          console.log(
+            `    ✓ Saved to: ${path.relative(process.cwd(), destPath)} (${(fs.statSync(destPath).size / 1024).toFixed(2)} KB)`,
+          );
+          if (job.kind === "pdf") downloadedPdf++;
+          else downloadedXbrl++;
+        } catch (err) {
+          failed++;
+          console.error(`    ✗ Failed to download:`, err.message);
+        }
+
         const delay = parseInt(process.env.NSE_DOWNLOAD_DELAY_MS, 10) || 750;
         await sleep(delay);
       }
@@ -242,11 +313,15 @@ async function main() {
     console.log("\n========================================================");
     console.log("              DOWNLOAD SESSION COMPLETED                ");
     console.log("========================================================");
-    console.log(`New files downloaded:   ${targetDownloadCount}`);
+    console.log(`Filings processed:      ${targetFilingCount}`);
+    console.log(`New XBRL downloaded:    ${downloadedXbrl}`);
+    console.log(`New PDF downloaded:     ${downloadedPdf}`);
+    console.log(`Failed:                 ${failed}`);
     console.log(
-      `Files remaining:        ${pendingDownloads.length - targetDownloadCount}`,
+      `Filings remaining:      ${pendingFilings.length - targetFilingCount}`,
     );
-    console.log(`Save directory:         ${TARGET_DIR}`);
+    console.log(`XBRL directory:         ${XBRL_DIR}`);
+    console.log(`PDF directory:          ${PDF_DIR}`);
     console.log(
       "To download more, run:   node scripts/download_nse_reports.js [limit]",
     );

@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
-import { AGENT_ROOT, resolveFromProject, resolveXbrlDir } from './paths.js';
+import { AGENT_ROOT, resolveFromProject, resolveXbrlDir, resolvePdfDir } from './paths.js';
 import {
   isFirebaseAuthConfigured,
   verifyFirebaseIdToken,
@@ -112,6 +112,22 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(cookieParser());
 app.use(express.static(path.join(AGENT_ROOT, 'src', 'public')));
+
+// Serve downloaded BRSR PDFs (data/pdf/YYYY/SYMBOL/) for citation "source" links
+const PDF_DIR = resolvePdfDir();
+if (!fs.existsSync(PDF_DIR)) {
+  fs.mkdirSync(PDF_DIR, { recursive: true });
+}
+app.use(
+  '/local-pdf',
+  express.static(PDF_DIR, {
+    fallthrough: false,
+    setHeaders(res) {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'inline');
+    },
+  }),
+);
 
 // Diagnostic check middleware
 app.use(async (req, res, next) => {

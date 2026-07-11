@@ -2,8 +2,13 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
-import { resolveFromProject } from './paths.js';
-import { CITABLE_METRICS } from './report-sources.js';
+import { resolveFromProject, resolvePdfDir } from './paths.js';
+import {
+  CITABLE_METRICS,
+  LOCAL_PDF_MOUNT,
+  lookupNseMetadata,
+  resolveLocalPdfPath,
+} from './report-sources.js';
 
 const PDF_CACHE_DIR = process.env.PDF_CACHE_DIR
   ? path.resolve(process.env.PDF_CACHE_DIR)
@@ -134,7 +139,7 @@ function cachePathForUrl(pdfUrl) {
   return path.join(PDF_CACHE_DIR, `${hash}.pdf`);
 }
 
-export async function downloadPdf(pdfUrl) {
+export async function downloadPdf(pdfUrl, hints = {}) {
   if (!pdfUrl) {
     throw new Error('Failed to download PDF (no url)');
   }
@@ -143,13 +148,46 @@ export async function downloadPdf(pdfUrl) {
     throw new Error(`Failed to download PDF (${entry?.reason || 'cached failure'})`);
   }
 
+  const bareUrl = String(pdfUrl).split('#')[0];
+
+  // Same-origin /local-pdf/YYYY/SYMBOL/file.pdf → filesystem
+  if (bareUrl.startsWith(LOCAL_PDF_MOUNT + '/')) {
+    const rel = bareUrl.slice(LOCAL_PDF_MOUNT.length + 1)
+      .split('/')
+      .map((part) => decodeURIComponent(part));
+    const localFromMount = path.join(resolvePdfDir(), ...rel);
+    if (fs.existsSync(localFromMount)) {
+      return localFromMount;
+    }
+  }
+
+  // Prefer durable archive under data/pdf/YYYY/SYMBOL/ when available
+  const meta = lookupNseMetadata({
+    filename: hints.filename,
+    company: hints.company,
+    year: hints.year,
+  });
+  const localArchive = resolveLocalPdfPath({
+    year: hints.year ?? meta?.year,
+    symbol: hints.symbol ?? meta?.symbol,
+    pdfUrl: bareUrl.startsWith('http') ? bareUrl : (meta?.pdfUrl || bareUrl),
+  });
+  if (localArchive) {
+    return localArchive;
+  }
+
   ensureCacheDir();
-  const cachePath = cachePathForUrl(pdfUrl);
+  const cachePath = cachePathForUrl(bareUrl);
   if (fs.existsSync(cachePath)) {
     return cachePath;
   }
 
-  const response = await fetch(pdfUrl, {
+  if (!/^https?:\/\//i.test(bareUrl)) {
+    markPdfDownloadFailed(pdfUrl, 'not a remote url');
+    throw new Error('Failed to download PDF (not a remote url)');
+  }
+
+  const response = await fetch(bareUrl, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (compatible; SusTallyBRSR/1.0)',
     },
@@ -449,7 +487,7 @@ export async function findMetricPagesResult(pdfUrl, metricValues, row = {}) {
   if (pending.length === 0) return { pages, unavailable: false };
 
   try {
-    const pdfPath = await downloadPdf(pdfUrl);
+    const pdfPath = await downloadPdf(pdfUrl, row);
     const pageTexts = await extractPageTexts(pdfPath);
 
     for (const [metric, value] of pending) {

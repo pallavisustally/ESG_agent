@@ -1,11 +1,14 @@
 import fs from 'fs';
 import path from 'path';
-import { resolveFromProject } from './paths.js';
+import { resolveFromProject, resolvePdfDir } from './paths.js';
 import { buildShareBreakdown } from './share-breakdown.js';
 
 const METADATA_PATH = process.env.METADATA_PATH
   ? path.resolve(process.env.METADATA_PATH)
   : resolveFromProject('data', 'nse_sustainability_metadata.json');
+
+/** Same-origin mount for downloaded PDFs (see server.js). */
+export const LOCAL_PDF_MOUNT = '/local-pdf';
 
 /** DB metric columns that can be cited with page numbers. */
 export const CITABLE_METRICS = [
@@ -86,6 +89,91 @@ export function lookupNseMetadata({ filename, company, year }) {
   return null;
 }
 
+function pdfBasename(pdfUrl) {
+  if (!pdfUrl) return null;
+  try {
+    return path.basename(new URL(pdfUrl).pathname);
+  } catch {
+    return path.basename(String(pdfUrl).split('?')[0].split('#')[0]);
+  }
+}
+
+/** Absolute path under data/pdf/YYYY/SYMBOL/ when the file was downloaded. */
+export function resolveLocalPdfPath({ year, symbol, pdfUrl }) {
+  if (!pdfUrl || year == null || !symbol) return null;
+  const filename = pdfBasename(pdfUrl);
+  if (!filename || !filename.toLowerCase().endsWith('.pdf')) return null;
+  const localPath = path.join(
+    resolvePdfDir(),
+    String(year),
+    String(symbol).toUpperCase(),
+    filename,
+  );
+  return fs.existsSync(localPath) ? localPath : null;
+}
+
+/** Public URL for a downloaded PDF, or null if not on disk. */
+export function toPublicPdfUrl({ year, symbol, pdfUrl }) {
+  const localPath = resolveLocalPdfPath({ year, symbol, pdfUrl });
+  if (!localPath) return null;
+  const filename = path.basename(localPath);
+  return [
+    LOCAL_PDF_MOUNT,
+    encodeURIComponent(String(year)),
+    encodeURIComponent(String(symbol).toUpperCase()),
+    encodeURIComponent(filename),
+  ].join('/');
+}
+
+/** NSE (or other remote) PDF URL for a report row — used for download/index fallback. */
+export function resolveRemotePdfUrlForRow(row) {
+  if (row?.pdf_unavailable) return null;
+  const candidates = [row?.pdf_url, row?.report_pdf_url].filter(Boolean);
+  for (const candidate of candidates) {
+    const url = String(candidate).split('#')[0];
+    if (url.startsWith(LOCAL_PDF_MOUNT)) continue;
+    if (/^https?:\/\//i.test(url) && /\.pdf$/i.test(url.split('?')[0])) return url;
+  }
+  const meta = lookupNseMetadata({
+    filename: row?.filename,
+    company: row?.company,
+    year: row?.year,
+  });
+  return meta?.pdfUrl || null;
+}
+
+/**
+ * Citation/link URL for the UI: prefer locally downloaded PDF under /local-pdf/...
+ * Fall back to the NSE URL when the file is not on disk yet.
+ */
+export function resolvePdfUrlForRow(row) {
+  if (row?.pdf_unavailable) return null;
+
+  const meta = lookupNseMetadata({
+    filename: row?.filename,
+    company: row?.company,
+    year: row?.year,
+  });
+
+  const remoteUrl = resolveRemotePdfUrlForRow(row);
+  const year = row?.year ?? meta?.year;
+  const symbol = meta?.symbol;
+
+  if (remoteUrl) {
+    const localPublic = toPublicPdfUrl({ year, symbol, pdfUrl: remoteUrl });
+    if (localPublic) return localPublic;
+  }
+
+  // Already a local public URL from a prior enrich step
+  for (const candidate of [row?.report_pdf_url, row?.pdf_url]) {
+    if (candidate && String(candidate).startsWith(LOCAL_PDF_MOUNT)) {
+      return String(candidate).split('#')[0];
+    }
+  }
+
+  return remoteUrl;
+}
+
 /** SQL aliases that mean this row is a computed aggregate, not a company filing. */
 const AGGREGATE_ALIAS_RE = /^(avg_|average_|sum_|count_|min_|max_|median_)/i;
 const AGGREGATE_EXACT_KEYS = new Set(['avg', 'average', 'sum', 'count', 'median']);
@@ -129,7 +217,7 @@ export function buildSourcesPayload(row, metricPages = null) {
   const usablePages = { ...pages };
   delete usablePages.__pdf_unavailable;
 
-  const pdfUrl = pdfUnavailable ? null : (row.pdf_url || row.report_pdf_url || null);
+  const pdfUrl = pdfUnavailable ? null : resolvePdfUrlForRow(row);
   const xbrlUrl = row.xbrl_url || row.report_xbrl_url || null;
 
   const metrics = {};
@@ -165,7 +253,7 @@ export function buildSourcesPayload(row, metricPages = null) {
     flat_fields: flatFields,
     citable,
     citation_hint: citable
-      ? 'REQUIRED citation format: p. N [source](full_pdf_url#page=N) — page number as plain text, [source] as the clickable link to the PDF page. Example: 56,820 tCO2e p. 39 [source](https://...pdf#page=39). Never use [report], [p. N](url), or a ## Sources footer.'
+      ? 'REQUIRED citation format: p. N [source](pdf_url#page=N) — page number as plain text, [source] as the clickable link to the PDF page. Copy the exact URL from ready_citations / *_citation (usually /local-pdf/...). Example: 56,820 tCO2e p. 39 [source](/local-pdf/2025/INFY/report.pdf#page=39). Never use [report], [p. N](url), or a ## Sources footer.'
       : 'No PDF page citations for this report. Show metric values only — do not add p. N, [source](...), or any source links.',
   };
 }
@@ -260,6 +348,7 @@ export function enrichCompanyReport(reportData, sourceRow) {
   const flatRow = {
     company: reportData.company,
     year: reportData.year,
+    filename: sourceRow?.filename || null,
     pdf_url: sourceRow?.pdf_url || null,
     xbrl_url: sourceRow?.xbrl_url || null,
   };
@@ -316,20 +405,6 @@ function escapeRegex(value) {
 
 /** Model-invented relative links like [source](report) resolve to /report on the app host. */
 const BROKEN_RELATIVE_LINK_RE = /\[(?:source|report)\]\((?:report|\/report|null|report_pdf_url|#?)\)/gi;
-
-function resolvePdfUrlForRow(row) {
-  if (row?.pdf_unavailable) return null;
-  let pdfUrl = row.pdf_url || row.report_pdf_url || null;
-  if (!pdfUrl) {
-    const meta = lookupNseMetadata({
-      filename: row.filename,
-      company: row.company,
-      year: row.year,
-    });
-    pdfUrl = meta?.pdfUrl || null;
-  }
-  return pdfUrl;
-}
 
 function repairBrokenLinksNearCompany(out, company, citation) {
   const companyEsc = escapeRegex(company);
@@ -500,7 +575,7 @@ function normalizeLegacyCitations(text, byPdf) {
     const citation = citationMarkdown(preferredPage, pdfUrl);
     out = out.replace(
       new RegExp(
-        `(^[^\\n]*${companyEsc}[^\\n]*?)(?<!p\\.\\s*\\d+\\s)\\[source\\]\\(https?[^\\)]+\\)`,
+        `(^[^\\n]*${companyEsc}[^\\n]*?)(?<!p\\.\\s*\\d+\\s)\\[source\\]\\((?:https?|\\/local-pdf)[^\\)]+\\)`,
         'gim',
       ),
       `$1${citation}`,
@@ -561,7 +636,7 @@ function dedupeInlineCitations(text) {
 }
 
 function lineAlreadyHasCitation(line) {
-  return /p\.\s*\d+\s*\[source\]\(|\[p\.\s*\d+\]\(|\[source\]\(https?:/i.test(line);
+  return /p\.\s*\d+\s*\[source\]\(|\[p\.\s*\d+\]\(|\[source\]\((?:https?:|\/local-pdf\/)/i.test(line);
 }
 
 function stripSourcesFooter(text) {
@@ -635,10 +710,19 @@ export function upgradeReportCitations(text, sourceRows = []) {
     }
     if (pages.__pdf_unavailable) continue;
     const pdfUrl = resolvePdfUrlForRow(row);
+    const remoteUrl = resolveRemotePdfUrlForRow(row);
     const preferredPage = preferredPageForRow(pages);
     // Only cite when we have both a live PDF URL and at least one page number.
     if (!pdfUrl || !preferredPage) continue;
-    byPdf.push({ row, pages, pdfUrl, preferredPage });
+    byPdf.push({ row, pages, pdfUrl, remoteUrl, preferredPage });
+  }
+
+  // If the model pasted NSE URLs, rewrite them to local /local-pdf/ links when available.
+  for (const { pdfUrl, remoteUrl } of byPdf) {
+    if (!remoteUrl || !pdfUrl || remoteUrl === pdfUrl) continue;
+    const remoteBase = escapeRegex(remoteUrl.split('#')[0]);
+    const localBase = pdfUrl.split('#')[0];
+    out = out.replace(new RegExp(remoteBase, 'gi'), localBase);
   }
 
   // Company-local broken placeholders -> real citation (only when page exists)

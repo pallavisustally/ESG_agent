@@ -26,6 +26,7 @@ pnpm-debug.log*
 
 # Raw and generated data
 data/xbrl/
+data/pdf/
 data/chats.json
 data/citation_tests/
 data/model_comparisons/

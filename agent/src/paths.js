@@ -27,6 +27,16 @@ export function resolveXbrlDir() {
     : resolveFromProject("data", "xbrl");
 }
 
+/** BRSR PDF attachments: data/pdf/2025/SYMBOL/, data/pdf/2026/SYMBOL/ (download only, not parsed) */
+export function resolvePdfDir() {
+  if (process.env.VERCEL) {
+    return "/tmp/pdf";
+  }
+  return process.env.PDF_DIR
+    ? path.resolve(process.env.PDF_DIR)
+    : resolveFromProject("data", "pdf");
+}
+
 export function resolveDbPath() {
   if (process.env.VERCEL) {
     return "/tmp/database.db";
