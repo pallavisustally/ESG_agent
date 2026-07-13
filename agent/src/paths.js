@@ -37,6 +37,20 @@ export function resolvePdfDir() {
     : resolveFromProject("data", "pdf");
 }
 
+/** Maps local pdf relative keys → Cloudflare R2 public URLs (committed; small JSON). */
+export function resolvePdfR2MapPath() {
+  return process.env.PDF_R2_MAP_PATH
+    ? path.resolve(process.env.PDF_R2_MAP_PATH)
+    : resolveFromProject("data", "pdf_r2_urls.json");
+}
+
+/** Maps local pdf relative keys → Hugging Face Hub resolve URLs (committed; small JSON). */
+export function resolvePdfHfMapPath() {
+  return process.env.PDF_HF_MAP_PATH
+    ? path.resolve(process.env.PDF_HF_MAP_PATH)
+    : resolveFromProject("data", "pdf_hf_urls.json");
+}
+
 export function resolveDbPath() {
   if (process.env.VERCEL) {
     return "/tmp/database.db";

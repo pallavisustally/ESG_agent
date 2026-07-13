@@ -7,6 +7,8 @@
     "preprocess": "node agent/scripts/preprocess.js",
     "enrich:sources": "node agent/scripts/enrich_report_sources.js --with-pages",
     "download-reports": "node agent/scripts/download_nse_reports.js",
+    "upload:r2": "node agent/scripts/upload_pdfs_to_r2.js",
+    "upload:hf": "node agent/scripts/upload_pdfs_to_hf.js",
     "install-browser": "npx puppeteer browsers install chrome",
     "report-counts": "node agent/scripts/report_counts.js",
     "evaluate": "node agent/scripts/evaluate_agent.js",
@@ -22,6 +24,8 @@
     "start": "node agent/src/server.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1085.0",
+    "@huggingface/hub": "^2.13.3",
     "cookie-parser": "^1.4.7",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",

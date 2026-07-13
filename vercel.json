@@ -9,6 +9,8 @@
           "node_modules/sql.js/dist/sql-wasm.wasm",
           "data/database.db",
           "data/nse_sustainability_metadata.json",
+          "data/pdf_r2_urls.json",
+          "data/pdf_hf_urls.json",
           "agent/src/public/index.html",
           "agent/src/public/style.css",
           "agent/src/public/app.js"

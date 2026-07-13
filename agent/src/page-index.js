@@ -9,6 +9,8 @@ import {
   lookupNseMetadata,
   resolveLocalPdfPath,
 } from './report-sources.js';
+import { resolveR2PdfUrl } from './r2-pdfs.js';
+import { resolveHfPdfUrl } from './hf-pdfs.js';
 
 const PDF_CACHE_DIR = process.env.PDF_CACHE_DIR
   ? path.resolve(process.env.PDF_CACHE_DIR)
@@ -176,18 +178,32 @@ export async function downloadPdf(pdfUrl, hints = {}) {
     return localArchive;
   }
 
+  // Hugging Face / R2 public URLs (production) — fetch into pdf_cache
+  const pdfHint = bareUrl.startsWith('http') ? bareUrl : (meta?.pdfUrl || bareUrl);
+  const hfUrl = resolveHfPdfUrl({
+    year: hints.year ?? meta?.year,
+    symbol: hints.symbol ?? meta?.symbol,
+    pdfUrl: pdfHint,
+  });
+  const r2Url = resolveR2PdfUrl({
+    year: hints.year ?? meta?.year,
+    symbol: hints.symbol ?? meta?.symbol,
+    pdfUrl: pdfHint,
+  });
+  const fetchUrl = hfUrl || r2Url || (/^https?:\/\//i.test(bareUrl) ? bareUrl : null);
+
   ensureCacheDir();
-  const cachePath = cachePathForUrl(bareUrl);
+  const cachePath = cachePathForUrl(fetchUrl || bareUrl);
   if (fs.existsSync(cachePath)) {
     return cachePath;
   }
 
-  if (!/^https?:\/\//i.test(bareUrl)) {
+  if (!fetchUrl) {
     markPdfDownloadFailed(pdfUrl, 'not a remote url');
     throw new Error('Failed to download PDF (not a remote url)');
   }
 
-  const response = await fetch(bareUrl, {
+  const response = await fetch(fetchUrl, {
     headers: {
       'User-Agent': 'Mozilla/5.0 (compatible; SusTallyBRSR/1.0)',
     },

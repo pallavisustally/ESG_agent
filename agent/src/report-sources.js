@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { resolveFromProject, resolvePdfDir } from './paths.js';
 import { buildShareBreakdown } from './share-breakdown.js';
+import { resolveR2PdfUrl } from './r2-pdfs.js';
+import { resolveHfPdfUrl } from './hf-pdfs.js';
 
 const METADATA_PATH = process.env.METADATA_PATH
   ? path.resolve(process.env.METADATA_PATH)
@@ -132,6 +134,8 @@ export function resolveRemotePdfUrlForRow(row) {
   for (const candidate of candidates) {
     const url = String(candidate).split('#')[0];
     if (url.startsWith(LOCAL_PDF_MOUNT)) continue;
+    if (/\.r2\.dev\//i.test(url) || /r2\.cloudflarestorage\.com\//i.test(url)) continue;
+    if (/huggingface\.co\//i.test(url)) continue;
     if (/^https?:\/\//i.test(url) && /\.pdf$/i.test(url.split('?')[0])) return url;
   }
   const meta = lookupNseMetadata({
@@ -143,8 +147,11 @@ export function resolveRemotePdfUrlForRow(row) {
 }
 
 /**
- * Citation/link URL for the UI: prefer locally downloaded PDF under /local-pdf/...
- * Fall back to the NSE URL when the file is not on disk yet.
+ * Citation/link URL for the UI:
+ *   1) local /local-pdf/... when file is on disk
+ *   2) Hugging Face Hub URL when mapped
+ *   3) Cloudflare R2 URL when mapped
+ *   4) NSE attachment URL as fallback
  */
 export function resolvePdfUrlForRow(row) {
   if (row?.pdf_unavailable) return null;
@@ -158,11 +165,18 @@ export function resolvePdfUrlForRow(row) {
   const remoteUrl = resolveRemotePdfUrlForRow(row);
   const year = row?.year ?? meta?.year;
   const symbol = meta?.symbol;
+  const pdfHint = remoteUrl || meta?.pdfUrl || null;
 
   if (remoteUrl) {
     const localPublic = toPublicPdfUrl({ year, symbol, pdfUrl: remoteUrl });
     if (localPublic) return localPublic;
   }
+
+  const hfUrl = resolveHfPdfUrl({ year, symbol, pdfUrl: pdfHint });
+  if (hfUrl) return hfUrl;
+
+  const r2Url = resolveR2PdfUrl({ year, symbol, pdfUrl: pdfHint });
+  if (r2Url) return r2Url;
 
   // Already a local public URL from a prior enrich step
   for (const candidate of [row?.report_pdf_url, row?.pdf_url]) {
@@ -253,7 +267,7 @@ export function buildSourcesPayload(row, metricPages = null) {
     flat_fields: flatFields,
     citable,
     citation_hint: citable
-      ? 'REQUIRED citation format: p. N [source](pdf_url#page=N) — page number as plain text, [source] as the clickable link to the PDF page. Copy the exact URL from ready_citations / *_citation (usually /local-pdf/...). Example: 56,820 tCO2e p. 39 [source](/local-pdf/2025/INFY/report.pdf#page=39). Never use [report], [p. N](url), or a ## Sources footer.'
+      ? 'REQUIRED citation format: p. N [source](pdf_url#page=N) — page number as plain text, [source] as the clickable link to the PDF page. Copy the exact URL from ready_citations / *_citation (Hugging Face, R2, /local-pdf/..., or NSE). Never use [report], [p. N](url), or a ## Sources footer.'
       : 'No PDF page citations for this report. Show metric values only — do not add p. N, [source](...), or any source links.',
   };
 }
@@ -717,7 +731,7 @@ export function upgradeReportCitations(text, sourceRows = []) {
     byPdf.push({ row, pages, pdfUrl, remoteUrl, preferredPage });
   }
 
-  // If the model pasted NSE URLs, rewrite them to local /local-pdf/ links when available.
+  // If the model pasted NSE URLs, rewrite them to local /local-pdf/ or R2 links when available.
   for (const { pdfUrl, remoteUrl } of byPdf) {
     if (!remoteUrl || !pdfUrl || remoteUrl === pdfUrl) continue;
     const remoteBase = escapeRegex(remoteUrl.split('#')[0]);
