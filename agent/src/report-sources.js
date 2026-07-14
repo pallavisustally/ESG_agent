@@ -347,6 +347,12 @@ export function enrichSqlRows(rows, sourceRowsByKey = new Map()) {
   });
 }
 
+function metricPlainValue(metrics, key) {
+  const raw = metrics?.[key];
+  if (raw == null) return null;
+  return typeof raw === 'object' ? (raw.value ?? null) : raw;
+}
+
 export function enrichCompanyReport(reportData, sourceRow) {
   if (!reportData || reportData.error) return reportData;
 
@@ -359,12 +365,17 @@ export function enrichCompanyReport(reportData, sourceRow) {
     }
   }
 
+  const sector = metricPlainValue(reportData.metrics, 'sector');
+  const industry = metricPlainValue(reportData.metrics, 'industry');
+
   const flatRow = {
     company: reportData.company,
     year: reportData.year,
     filename: sourceRow?.filename || null,
     pdf_url: sourceRow?.pdf_url || null,
     xbrl_url: sourceRow?.xbrl_url || null,
+    sector,
+    industry,
   };
 
   for (const metric of CITABLE_METRICS) {
@@ -379,6 +390,8 @@ export function enrichCompanyReport(reportData, sourceRow) {
   const shareBreakdown = buildShareBreakdown({ ...flatRow, ...sourceRow });
   return {
     ...reportData,
+    sector,
+    industry,
     ...sources.flat_fields,
     report_pdf_url: sources.report_pdf_url,
     report_xbrl_url: sources.report_xbrl_url,

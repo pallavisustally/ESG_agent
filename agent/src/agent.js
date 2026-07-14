@@ -75,6 +75,27 @@ function ensureCompanyYearInSelect(query) {
   return trimmed.replace(/^select\s+/i, `SELECT ${additions}, `);
 }
 
+/**
+ * Rewrite exact company equality to fuzzy LIKE so "HDFC Bank" matches
+ * "HDFC Bank Limited". Leaves existing LIKE clauses unchanged.
+ */
+function relaxCompanyExactMatch(query) {
+  if (!query || typeof query !== 'string') return query;
+
+  const escapeSqlLiteral = (value) => String(value).replace(/'/g, "''");
+
+  return query.replace(
+    /\bcompany\s*=\s*(?:'([^']*)'|"([^"]*)")/gi,
+    (_match, singleQuoted, doubleQuoted) => {
+      const raw = (singleQuoted ?? doubleQuoted ?? '').trim();
+      if (!raw || raw.includes('%')) {
+        return `company = '${escapeSqlLiteral(raw)}'`;
+      }
+      return `company LIKE '%${escapeSqlLiteral(raw)}%'`;
+    },
+  );
+}
+
 function extractCompanyYearHints(query) {
   const companyMatch = query.match(/company\s*(?:like|=)\s*'([^']+)'/i)
     || query.match(/company\s*(?:like|=)\s*"([^"]+)"/i);
@@ -138,7 +159,7 @@ export async function runAgent({
           properties: {
             company: { 
               type: 'string', 
-              description: 'The exact name of the company (e.g. "Infosys Limited", "DCB Bank Limited").' 
+              description: 'Company name or partial name (e.g. "HDFC Bank", "Infosys Limited"). Partial names are resolved automatically.' 
             },
             year: { 
               type: 'integer', 
@@ -299,8 +320,15 @@ export async function runAgent({
       
       try {
         const db = await getDb();
-        const rewritten = ensureCompanyYearInSelect(query);
-        const { companyHint, yearHint } = extractCompanyYearHints(query);
+        const rewritten = ensureCompanyYearInSelect(relaxCompanyExactMatch(query));
+        if (onProgress && rewritten !== query.trim().replace(/;+\s*$/, '')) {
+          onProgress({
+            status: 'tool_start',
+            tool: 'execute_sql_query',
+            message: `Rewrote company filter for fuzzy match: "${rewritten}"`,
+          });
+        }
+        const { companyHint, yearHint } = extractCompanyYearHints(rewritten);
         const rows = await db.all(rewritten);
 
         const normalizedRows = rows.map((row) => ({
