@@ -188,7 +188,7 @@ function hasFemaleOnEmissionsLine(text) {
   return text.split('\n').some((line) => {
     if (!/scope\s*[123]|emission|renewable|carbon|tco2/i.test(line)) return false;
     if (/female employee share|workforce|diversity/i.test(line)) return false;
-    return /\bfemale permanent employees of\b/i.test(line);
+    return /\bfemale (?:permanent )?employees of\b/i.test(line);
   });
 }
 
@@ -478,37 +478,37 @@ async function runCitationSanitizerTests(results) {
 
   const { pageContainsShareMetric, scoreShareMetricPage } = await import('../src/page-index.js');
   const coverPage = 'GATEWAY DISTRIPARKS LIMITED CIN L60231MH2005PLC344764 100 41 registered office';
-  const diversityPage = 'Employees and workers (including differently abled) Particulars Total Male Female EMPLOYEES Permanent (D) 504 463 91.86% 41 8.14%';
+  const diversityPage = 'Employees and workers (including differently abled) Particulars Total Male Female EMPLOYEES Permanent (D) 504 463 91.86% 41 8.14% Total employees (D+E) 504 463 41 8.13%';
   record(
     results,
     'Sanitizer',
     'Share metric page match prefers diversity context over cover page numbers',
     !pageContainsShareMetric(coverPage, 'female_employee_share', {
       female_employee_count: 41,
-      total_employee_count: 41,
-      female_employee_share: 100,
+      total_employee_count: 504,
+      female_employee_share: 8.13,
     })
     && pageContainsShareMetric(diversityPage, 'female_employee_share', {
       female_employee_count: 41,
-      total_employee_count: 41,
-      female_employee_share: 100,
+      total_employee_count: 504,
+      female_employee_share: 8.13,
     }),
   );
 
-  const mahindraDiversity = '003A Employees and workers (including differently abled) Particulars Total Male Female EMPLOYEES Permanent (D) 277 267 96% 10 4% Total employees (D+E) 282 271 96% 10 4%';
-  const mahindraTraining = 'Total Permanent Employees 267 292 Male 282 Female 277 training given to employees and workers union';
+  const mahindraDiversity = '003A Employees and workers (including differently abled) Particulars Total Male Female EMPLOYEES Permanent (D) 292 282 96.58% 10 3.42% Total employees (D+E) 296 286 10 3.38%';
+  const mahindraTraining = 'Total Permanent Employees 267 292 Male 282 Female 10 training given to employees and workers union';
   record(
     results,
     'Sanitizer',
     'Share metric scoring prefers BRSR diversity table over training/union pages',
     scoreShareMetricPage(mahindraDiversity, 'female_employee_share', {
-      female_employee_count: 282,
-      total_employee_count: 292,
-      female_employee_share: 96.58,
+      female_employee_count: 10,
+      total_employee_count: 296,
+      female_employee_share: 3.38,
     }, 77) > scoreShareMetricPage(mahindraTraining, 'female_employee_share', {
-      female_employee_count: 282,
-      total_employee_count: 292,
-      female_employee_share: 96.58,
+      female_employee_count: 10,
+      total_employee_count: 296,
+      female_employee_share: 3.38,
     }, 92),
   );
 }

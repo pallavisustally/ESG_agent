@@ -12,6 +12,8 @@
     "install-browser": "npx puppeteer browsers install chrome",
     "report-counts": "node agent/scripts/report_counts.js",
     "evaluate": "node agent/scripts/evaluate_agent.js",
+    "evaluate:top15": "node agent/scripts/top15_important_questions.js",
+    "evaluate:top15:run": "node agent/scripts/top15_important_questions.js --run",
     "evaluate:judge": "node agent/scripts/evaluate_with_judge.js",
     "compare:models": "node agent/scripts/compare_models.js",
     "compare:gpt-deepseek": "node agent/scripts/compare_gpt_deepseek.js --fast",

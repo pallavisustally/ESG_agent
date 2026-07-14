@@ -70,8 +70,8 @@ export function buildShareBreakdown(row) {
       percent: femaleShare,
       numerator: Number.isFinite(femaleEmployees) && femaleEmployees > 0 ? femaleEmployees : null,
       denominator: totalEmployees,
-      numeratorLabel: 'female permanent employees',
-      denominatorLabel: 'total permanent employees',
+      numeratorLabel: 'female employees',
+      denominatorLabel: 'total employees',
     });
     if (entry) breakdown.female_employee_share = entry;
   }

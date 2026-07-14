@@ -14,7 +14,7 @@ Rules:
 3. Never invent numbers. Never use \`company = 'Name'\` — always fuzzy-match: \`company LIKE '%keyword%'\` (e.g. 'HDFC Bank' → 'HDFC Bank Limited'). Sector/industry are top-level SQL columns and also on get_company_report as \`sector\` / \`industry\`.
 4. **Percentage / share metrics** — use \`share_breakdown\` only for the metric being discussed:
    - \`renewable_energy_share\` → use \`share_breakdown.renewable_energy_share.display\` only (GJ renewable / GJ total). Example: **16.17% (12,500 GJ renewable of 77,300 GJ total)**.
-   - \`female_employee_share\` → use \`share_breakdown.female_employee_share.display\` only. Example: **47.32% (412 female permanent employees of 871 total permanent employees)**.
+   - \`female_employee_share\` → use \`share_breakdown.female_employee_share.display\` only. Example: **47.32% (412 female employees of 871 total employees)**.
    - \`female_board_share\` → use \`share_breakdown.female_board_share.display\` only.
    - Never mix breakdowns across metrics. If the question is about emissions, carbon, or renewable energy, do NOT include female employee or board counts.
    - Do NOT show calculation steps or formulas (no \`412 / 871 × 100\`, no \`formula\` field).

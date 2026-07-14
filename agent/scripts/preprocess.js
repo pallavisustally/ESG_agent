@@ -106,7 +106,7 @@ function getLeafNodes(obj, prefix = '', list = []) {
 }
 
 // Extract company, year, and structured metrics from parsed XML (supports both mock and SEBI standards)
-function normalizeReport(parsedXml, filePath = '') {
+export function normalizeReport(parsedXml, filePath = '') {
   const cleaned = cleanXmlKeys(parsedXml);
   
   // 1. Check if this is the mock XML structure
@@ -264,12 +264,61 @@ function normalizeReport(parsedXml, filePath = '') {
     if (wsInt) metrics.waste_intensity = wsInt.value;
 
     // Demographics & Diversity
-    const empGenderCtx = context === 'DCYMain' ? 'D_Gender_PermanentEmployees' : 'D_Gender_PermanentEmployees_PY';
-    const empFemaleCtx = context === 'DCYMain' ? 'D_Female_PermanentEmployees' : 'D_Female_PermanentEmployees_PY';
-    
-    const totalEmp = getMetricVal('TotalNumberOfEmployeesOrWorkersForMembership', empGenderCtx) || getMetricVal('TotalNumberOfEmployeesOrWorkersForPerformanceAndCareerDevelopment', empGenderCtx);
-    const femaleEmp2 = getMetricVal('TotalNumberOfEmployeesOrWorkersForMembership', empFemaleCtx) || getMetricVal('TotalNumberOfEmployeesOrWorkersForPerformanceAndCareerDevelopment', empFemaleCtx);
-    
+    // Prefer BRSR Section A headcount (permanent + other-than-permanent employees).
+    // Do NOT use union-membership / performance-coverage totals — those inflate or distort shares.
+    const isCurrentYear = context === 'DCYMain';
+    const headcountTotalCtx = isCurrentYear ? 'D_Gender_Employees_TableA' : null;
+    const headcountFemaleCtx = isCurrentYear ? 'D_Female_Employees_TableA' : null;
+    const permTotalCtx = isCurrentYear ? 'D_Gender_PermanentEmployees_TableA' : 'D_Gender_PermanentEmployees_PY';
+    const permFemaleCtx = isCurrentYear ? 'D_Female_PermanentEmployees_TableA' : 'D_Female_PermanentEmployees_PY';
+    const otpTotalCtx = isCurrentYear ? 'D_Gender_OtherThanPermanentEmployees_TableA' : null;
+    const otpFemaleCtx = isCurrentYear ? 'D_Female_OtherThanPermanentEmployees_TableA' : null;
+    const legacyTotalCtx = isCurrentYear ? 'D_Gender_PermanentEmployees' : 'D_Gender_PermanentEmployees_PY';
+    const legacyFemaleCtx = isCurrentYear ? 'D_Female_PermanentEmployees' : 'D_Female_PermanentEmployees_PY';
+
+    let totalEmp = headcountTotalCtx
+      ? getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', headcountTotalCtx)
+      : null;
+    let femaleEmp2 = headcountFemaleCtx
+      ? getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', headcountFemaleCtx)
+      : null;
+
+    // Fallback: permanent + other-than-permanent headcount rows
+    if ((!totalEmp || !femaleEmp2) && isCurrentYear) {
+      const permTotal = getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', permTotalCtx);
+      const permFemale = getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', permFemaleCtx);
+      const otpTotal = getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', otpTotalCtx);
+      const otpFemale = getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', otpFemaleCtx);
+      if (permTotal?.value > 0 && permFemale) {
+        totalEmp = { value: permTotal.value + (otpTotal?.value || 0), unit: permTotal.unit || '' };
+        femaleEmp2 = { value: permFemale.value + (otpFemale?.value || 0), unit: permFemale.unit || '' };
+      }
+    }
+
+    // Last resort (mainly previous-year rows): permanent membership/performance totals
+    if (!totalEmp || !(totalEmp.value > 0)) {
+      totalEmp = getMetricVal('TotalNumberOfEmployeesOrWorkersForMembership', legacyTotalCtx)
+        || getMetricVal('TotalNumberOfEmployeesOrWorkersForPerformanceAndCareerDevelopment', legacyTotalCtx)
+        || getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', permTotalCtx);
+      femaleEmp2 = getMetricVal('TotalNumberOfEmployeesOrWorkersForMembership', legacyFemaleCtx)
+        || getMetricVal('TotalNumberOfEmployeesOrWorkersForPerformanceAndCareerDevelopment', legacyFemaleCtx)
+        || getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', permFemaleCtx);
+
+      // Reject clearly broken PY gender splits (e.g. female≈total while male is 0).
+      const legacyMaleCtx = isCurrentYear ? 'D_Male_PermanentEmployees' : 'D_Male_PermanentEmployees_PY';
+      const maleEmp = getMetricVal('TotalNumberOfEmployeesOrWorkersForMembership', legacyMaleCtx)
+        || getMetricVal('TotalNumberOfEmployeesOrWorkersForPerformanceAndCareerDevelopment', legacyMaleCtx);
+      if (
+        totalEmp?.value > 50
+        && femaleEmp2
+        && (femaleEmp2.value / totalEmp.value) > 0.9
+        && (!maleEmp || maleEmp.value === 0)
+      ) {
+        totalEmp = null;
+        femaleEmp2 = null;
+      }
+    }
+
     if (totalEmp && totalEmp.value > 0) {
       metrics.total_employee_count = totalEmp.value;
       if (femaleEmp2) {

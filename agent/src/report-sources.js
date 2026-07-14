@@ -510,7 +510,7 @@ const METRIC_LINE_HINTS = {
   total_revenue: /\brevenue\b|\bturnover\b/i,
 };
 
-const FEMALE_BREAKDOWN_RE = /\s*\([^)]*\bfemale permanent employees of[^)]*\btotal permanent employees\)/gi;
+const FEMALE_BREAKDOWN_RE = /\s*\([^)]*\bfemale (?:permanent )?employees of[^)]*\btotal (?:permanent )?employees\)/gi;
 const FEMALE_BOARD_BREAKDOWN_RE = /\s*\([^)]*\bfemale board directors of[^)]*\btotal board directors\)/gi;
 const EMISSION_OR_ENERGY_LINE_RE = /\bscope\s*[123]\b|scope[123]|emission|renewable|carbon|tco2|energy intensity/i;
 
@@ -527,7 +527,7 @@ function lineMatchesMetric(line, metric) {
   }
 
   if ((metric === 'renewable_energy_share' || metric.startsWith('scope'))
-    && /\bfemale permanent employees\b|\bfemale board directors\b/i.test(line)
+    && /\bfemale (?:permanent )?employees\b|\bfemale board directors\b/i.test(line)
     && !hint.test(metricLabel)) {
     return false;
   }
