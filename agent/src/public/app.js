@@ -145,7 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // State Variables
-  // Guests: sessionStorage only (temporary per tab — new localhost tab = fresh chat).
+  // Guests: localStorage (survives refresh + browser reopen).
   // Signed-in: localStorage cache + server persistence.
   const SIGNED_IN_SESSIONS_KEY = 'sustally_sessions';
   const GUEST_SESSIONS_KEY = 'sustally_guest_sessions';
@@ -165,10 +165,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function readGuestSessions() {
     try {
-      return JSON.parse(sessionStorage.getItem(GUEST_SESSIONS_KEY)) || [];
+      const fromLocal = JSON.parse(localStorage.getItem(GUEST_SESSIONS_KEY));
+      if (Array.isArray(fromLocal) && fromLocal.length > 0) {
+        return fromLocal;
+      }
     } catch {
-      return [];
+      // fall through
     }
+
+    // One-time migration from the previous sessionStorage-only guest storage.
+    try {
+      const fromSession = JSON.parse(sessionStorage.getItem(GUEST_SESSIONS_KEY));
+      if (Array.isArray(fromSession) && fromSession.length > 0) {
+        localStorage.setItem(GUEST_SESSIONS_KEY, JSON.stringify(fromSession));
+        sessionStorage.removeItem(GUEST_SESSIONS_KEY);
+        return fromSession;
+      }
+    } catch {
+      // fall through
+    }
+
+    return [];
   }
 
   function readSignedInSessionsCache() {
@@ -184,10 +201,11 @@ document.addEventListener('DOMContentLoaded', () => {
       localStorage.setItem(SIGNED_IN_SESSIONS_KEY, JSON.stringify(sessions));
       return;
     }
-    sessionStorage.setItem(GUEST_SESSIONS_KEY, JSON.stringify(sessions));
+    localStorage.setItem(GUEST_SESSIONS_KEY, JSON.stringify(sessions));
   }
 
   function clearGuestSessions() {
+    localStorage.removeItem(GUEST_SESSIONS_KEY);
     sessionStorage.removeItem(GUEST_SESSIONS_KEY);
   }
 
@@ -383,6 +401,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const data = await res.json();
     if (data.success && Array.isArray(data.sessions)) {
+      // Keep local cache if the server returns empty (e.g. ephemeral /tmp DB on Vercel cold start).
+      if (data.sessions.length === 0) {
+        const cached = readSignedInSessionsCache();
+        if (cached.length > 0) {
+          sessions = cached;
+          const migrateRes = await fetch('/api/sessions/migrate', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sessions: cached }),
+          });
+          if (migrateRes.ok) {
+            const migrateData = await migrateRes.json();
+            if (migrateData.success && Array.isArray(migrateData.sessions)) {
+              sessions = migrateData.sessions;
+              persistSessionsLocally();
+            }
+          }
+          return;
+        }
+      }
+
       sessions = data.sessions;
       persistSessionsLocally();
     }
@@ -402,7 +442,6 @@ document.addEventListener('DOMContentLoaded', () => {
         currentUser = data.user;
         await loadSessionsFromServer();
       } else {
-        // Not signed in: temporary tab-only chats (never restore from localStorage).
         currentUser = null;
         sessions = readGuestSessions();
       }
@@ -619,7 +658,7 @@ document.addEventListener('DOMContentLoaded', () => {
     lucide.createIcons();
   }
 
-  // Save/Update Session (guest: sessionStorage; signed-in: localStorage + server)
+  // Save/Update Session (guest: localStorage; signed-in: localStorage + server)
   function saveCurrentSession() {
     if (chatHistory.length === 0) return;
 
@@ -1364,8 +1403,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Append to UI
     appendMessageBubble('user', text);
 
-    // Save user message to current chatHistory
+    // Save user message to current chatHistory and persist immediately
+    // so a refresh mid-response does not lose the conversation.
     chatHistory.push({ role: 'user', content: text });
+    saveCurrentSession();
 
     // Initialize Assistant Bubble with Thought Accordion skeleton
     const assistantBubble = appendMessageBubble('assistant', '');
@@ -1617,15 +1658,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
     renderSessionList();
 
-    // Signed-in: restore last chat from server cache.
-    // Guest: restore only if this same browser tab still has temporary sessionStorage history.
-    // Opening a new localhost tab always starts with an empty guest chat.
+    // Restore the most recent chat for both guests and signed-in users.
     if (sessions.length > 0) {
       loadSession(sessions[0].id);
     } else {
       startNewChat();
     }
   }
+
+  // Flush the in-progress chat before the tab is closed or navigated away.
+  window.addEventListener('pagehide', () => {
+    if (chatHistory.length > 0) {
+      saveCurrentSession();
+    }
+  });
 
   initializeApp();
 });
