@@ -1,26 +1,31 @@
 import { getDb } from './db.js';
 
 export async function initUserChatTables(db) {
+  const pg = db.dialect === 'postgres';
+  const userIdCol = pg ? 'id SERIAL PRIMARY KEY' : 'id INTEGER PRIMARY KEY AUTOINCREMENT';
+  const createdAt = pg
+    ? 'created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP'
+    : 'created_at DATETIME DEFAULT CURRENT_TIMESTAMP';
+
   await db.exec(`
     CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ${userIdCol},
       google_id TEXT NOT NULL UNIQUE,
       email TEXT NOT NULL,
       name TEXT,
       picture TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      ${createdAt}
     )
   `);
 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id TEXT PRIMARY KEY,
-      user_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       title TEXT NOT NULL,
       history_json TEXT NOT NULL,
-      updated_at INTEGER NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      updated_at BIGINT NOT NULL,
+      ${createdAt}
     )
   `);
 

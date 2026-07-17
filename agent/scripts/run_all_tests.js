@@ -40,6 +40,14 @@ import { verifyAgentCitations } from '../src/pdf-verifier.js';
 import { verifyValueOnPdfPage } from '../src/page-index.js';
 import { lookupNseMetadata } from '../src/report-sources.js';
 import { upgradeReportCitations } from '../src/report-sources.js';
+import {
+  sanitizeMetricOrderQuery,
+  filterRankingRows,
+  alignRankingQueryWithQuestion,
+  detectFemaleShareRankingIntent,
+  findUnknownSqlColumns,
+  hasUnsupportedMetricQualifier,
+} from '../src/sql-sanitize.js';
 
 dotenv.config();
 
@@ -114,7 +122,7 @@ const AGENT_QUESTIONS = [
   {
     id: 'Q7',
     name: 'Sector carbon intensity ranking',
-    q: 'Analyze average carbon emissions intensity across all sectors in 2025. Rank sectors and show a pie chart of sector share.',
+    q: 'Analyze average carbon emissions intensity across all sectors in 2025. Rank sectors and show a bar chart.',
     expectYear: 2025,
     expectKeywords: ['sector', 'intensity', '2025'],
     wantsChart: true,
@@ -134,7 +142,7 @@ const AGENT_QUESTIONS = [
   {
     id: 'Q9',
     name: 'Top female workforce companies + charts',
-    q: 'Analyze the top 5 companies with the highest female employee share in 2025. Show a bar chart and a pie chart of their relative shares.',
+    q: 'Analyze the top 5 companies with the highest female employee share in 2025. Show a bar chart.',
     expectYear: 2025,
     expectKeywords: ['female', '2025'],
     wantsChart: true,
@@ -474,6 +482,80 @@ async function runCitationSanitizerTests(results) {
     'Strip misleading PDF citations from sector aggregate lines',
     !/\[source\]\(/.test(sectorCleaned) && sectorCleaned.includes('20.89'),
     { cleanedPreview: sectorCleaned.slice(0, 220) },
+  );
+
+  const badRankSql = `SELECT company, year, female_employee_share FROM reports WHERE year = 2025 ORDER BY female_employee_share DESC LIMIT 5`;
+  const sanitized = sanitizeMetricOrderQuery(badRankSql, { postgres: true });
+  record(
+    results,
+    'Sanitizer',
+    'Ranking SQL adds NULL/zero filters and NULLS LAST',
+    /female_employee_share IS NOT NULL/i.test(sanitized.sql)
+      && /female_employee_share > 0/i.test(sanitized.sql)
+      && /total_employee_count > 0/i.test(sanitized.sql)
+      && /NULLS LAST/i.test(sanitized.sql)
+      && sanitized.limit === 5
+      && /LIMIT 15/i.test(sanitized.sql),
+    { rewritten: sanitized.sql },
+  );
+
+  const countInsteadOfShare = `SELECT company, female_employee_count FROM reports WHERE year = 2025 ORDER BY female_employee_count DESC LIMIT 5`;
+  const aligned = sanitizeMetricOrderQuery(countInsteadOfShare, {
+    postgres: true,
+    userMessage: 'Analyze the top 5 companies with the highest female employee share in 2025',
+  });
+  record(
+    results,
+    'Sanitizer',
+    'Share question forces ORDER BY female_employee_share not count',
+    detectFemaleShareRankingIntent('top 5 highest female employee share in 2025')
+      && /ORDER BY female_employee_share/i.test(alignRankingQueryWithQuestion(countInsteadOfShare, 'top female employee share'))
+      && aligned.orderColumn === 'female_employee_share'
+      && /female_employee_share > 0/i.test(aligned.sql),
+    { rewritten: aligned.sql },
+  );
+
+  record(
+    results,
+    'Sanitizer',
+    'Unsupported metric qualifiers skip female-share rewrite/fallback',
+    hasUnsupportedMetricQualifier('top 5 companies with highest disabled female workers')
+      && !detectFemaleShareRankingIntent('top disabled female workforce share 2025')
+      && /ORDER BY female_employee_count/i.test(
+        alignRankingQueryWithQuestion(countInsteadOfShare, 'top disabled female workforce share'),
+      ),
+  );
+
+  record(
+    results,
+    'Sanitizer',
+    'Unknown SQL columns detected; real schema columns accepted',
+    findUnknownSqlColumns(
+      "SELECT company, disabled_female_count FROM reports WHERE company LIKE '%HDFC%' ORDER BY disabled_female_count DESC",
+    ).includes('disabled_female_count')
+      && findUnknownSqlColumns(
+        'SELECT company, year, female_employee_share, total_employee_count FROM reports WHERE year = 2025',
+      ).length === 0,
+  );
+
+  const ranked = filterRankingRows([
+    { company: 'Bad Null Co', year: 2025, female_employee_share: null, total_employee_count: 10 },
+    { company: 'Zero Share Co', year: 2025, female_employee_share: 0, total_employee_count: 10 },
+    { company: 'Unknown Company', year: 2025, female_employee_share: 99, total_employee_count: 10 },
+    { company: 'Aditya Birla Fashion and Retail Limited', year: 2025, female_employee_share: 68.61, total_employee_count: 39606 },
+    { company: 'Rainbow Childrens Medicare Limited', year: 2025, female_employee_share: 62.05, total_employee_count: 5523 },
+    { company: 'RAINBOW CHILDRENS MEDICARE LIMITED', year: 2025, female_employee_share: 62.05, total_employee_count: 5523 },
+  ], 'female_employee_share', 'DESC').slice(0, 5);
+
+  record(
+    results,
+    'Sanitizer',
+    'Ranking rows drop null/zero and dedupe company names',
+    ranked.length === 2
+      && ranked[0].company.includes('Aditya Birla')
+      && /rainbow/i.test(ranked[1].company)
+      && !ranked.some((r) => /unknown/i.test(r.company)),
+    { ranked: ranked.map((r) => r.company) },
   );
 
   const { pageContainsShareMetric, scoreShareMetricPage } = await import('../src/page-index.js');

@@ -8,6 +8,7 @@ import {
   LOCAL_PDF_MOUNT,
   lookupNseMetadata,
   resolveLocalPdfPath,
+  isUsablePdfUrl,
 } from './report-sources.js';
 import { resolveR2PdfUrl } from './r2-pdfs.js';
 import { resolveHfPdfUrl } from './hf-pdfs.js';
@@ -87,7 +88,10 @@ function isPdfFontNoise(message) {
   return /Warning:\s*TT:\s*(?:undefined function|invalid function id):/i.test(message)
     || /Warning:\s*fetchStandardFontData/i.test(message)
     || /Warning:\s*Required "glyf" table is not found/i.test(message)
-    || /Warning:\s*Indexing all PDF objects/i.test(message);
+    || /Warning:\s*Indexing all PDF objects/i.test(message)
+    || /Warning:\s*getHexString\b/i.test(message)
+    || /ignoring invalid character/i.test(message)
+    || /ignoring additional invalid characters/i.test(message);
 }
 
 const originalConsoleLog = console.log.bind(console);
@@ -145,6 +149,10 @@ export async function downloadPdf(pdfUrl, hints = {}) {
   if (!pdfUrl) {
     throw new Error('Failed to download PDF (no url)');
   }
+  if (!isUsablePdfUrl(pdfUrl)) {
+    markPdfDownloadFailed(pdfUrl, 'not a pdf url');
+    throw new Error('Failed to download PDF (not a pdf url)');
+  }
   if (isPdfDownloadFailed(pdfUrl)) {
     const entry = failedPdfDownloads.get(pdfUrl);
     throw new Error(`Failed to download PDF (${entry?.reason || 'cached failure'})`);
@@ -159,6 +167,7 @@ export async function downloadPdf(pdfUrl, hints = {}) {
       .map((part) => decodeURIComponent(part));
     const localFromMount = path.join(resolvePdfDir(), ...rel);
     if (fs.existsSync(localFromMount)) {
+      assertPdfMagic(localFromMount, pdfUrl);
       return localFromMount;
     }
   }
@@ -175,6 +184,7 @@ export async function downloadPdf(pdfUrl, hints = {}) {
     pdfUrl: bareUrl.startsWith('http') ? bareUrl : (meta?.pdfUrl || bareUrl),
   });
   if (localArchive) {
+    assertPdfMagic(localArchive, pdfUrl);
     return localArchive;
   }
 
@@ -190,11 +200,12 @@ export async function downloadPdf(pdfUrl, hints = {}) {
     symbol: hints.symbol ?? meta?.symbol,
     pdfUrl: pdfHint,
   });
-  const fetchUrl = hfUrl || r2Url || (/^https?:\/\//i.test(bareUrl) ? bareUrl : null);
+  const fetchUrl = hfUrl || r2Url || (/^https?:\/\//i.test(bareUrl) && isUsablePdfUrl(bareUrl) ? bareUrl : null);
 
   ensureCacheDir();
   const cachePath = cachePathForUrl(fetchUrl || bareUrl);
   if (fs.existsSync(cachePath)) {
+    assertPdfMagic(cachePath, pdfUrl);
     return cachePath;
   }
 
@@ -215,8 +226,35 @@ export async function downloadPdf(pdfUrl, hints = {}) {
   }
 
   const buffer = Buffer.from(await response.arrayBuffer());
+  if (!looksLikePdfBuffer(buffer)) {
+    markPdfDownloadFailed(pdfUrl, 'downloaded content is not a pdf');
+    throw new Error('Failed to download PDF (content is not a PDF — often XBRL/XML)');
+  }
   fs.writeFileSync(cachePath, buffer);
   return cachePath;
+}
+
+function looksLikePdfBuffer(buffer) {
+  if (!buffer || buffer.length < 5) return false;
+  // Allow a small BOM/whitespace prefix before %PDF
+  const head = buffer.subarray(0, 32).toString('latin1');
+  if (/%PDF-/i.test(head)) return true;
+  if (/^\s*<\?xml/i.test(head) || /<xbrl/i.test(head)) return false;
+  return false;
+}
+
+function assertPdfMagic(filePath, pdfUrl) {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buf = Buffer.alloc(32);
+    fs.readSync(fd, buf, 0, 32, 0);
+    if (!looksLikePdfBuffer(buf)) {
+      markPdfDownloadFailed(pdfUrl, 'cached file is not a pdf');
+      throw new Error('Failed to download PDF (cached file is not a PDF)');
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 async function extractPageTexts(pdfPath) {
@@ -487,7 +525,7 @@ export async function verifyValueOnPdfPage(pdfUrl, pageNum, value, options = {})
  */
 export async function findMetricPagesResult(pdfUrl, metricValues, row = {}) {
   const pages = {};
-  if (!pdfUrl) return { pages, unavailable: true };
+  if (!pdfUrl || !isUsablePdfUrl(pdfUrl)) return { pages, unavailable: true };
 
   if (isPdfDownloadFailed(pdfUrl)) {
     if (!warnedFailedPdf.has(pdfUrl)) {

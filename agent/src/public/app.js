@@ -39,13 +39,15 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function buildCitationHtml(page, url) {
-    const safeUrl = escapeHtmlAttr(url);
+    const trimmed = String(url || '').trim();
+    const isPdf = /\.pdf($|\?|#)/i.test(trimmed) || /^\/local-pdf\/.+\.pdf($|\?|#)/i.test(trimmed);
     const pageLabel = page ? `p. ${page}` : '';
-    if (!safeUrl) {
+    if (!trimmed || !isPdf || /\.(xml|xbrl)($|\?|#)/i.test(trimmed) || /\/xbrl\//i.test(trimmed)) {
       return pageLabel
         ? `<span class="metric-citation">${pageLabel}</span>`
         : '';
     }
+    const safeUrl = escapeHtmlAttr(trimmed);
     return `<span class="metric-citation">${pageLabel}${pageLabel ? ' ' : ''}<a href="${safeUrl}" class="citation-source-link" target="_blank" rel="noopener noreferrer">source</a></span>`;
   }
 
@@ -121,7 +123,20 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      if (!/\.pdf/i.test(href) && label !== 'source' && label !== 'report') return;
+      const isPdfHref = /\.pdf($|\?|#)/i.test(href) || /^\/local-pdf\/.+\.pdf($|\?|#)/i.test(href);
+      const isXmlHref = /\.(xml|xbrl)($|\?|#)/i.test(href) || /\/xbrl\//i.test(href);
+      // Never turn XBRL/XML (or other non-PDF) URLs into clickable "source" links.
+      if (!isPdfHref || isXmlHref) {
+        if (label === 'source' || label === 'report' || isXmlHref) {
+          const pageMatch = anchor.parentElement?.textContent?.match(/p\.\s*(\d+)/i);
+          const fallback = document.createElement('span');
+          fallback.className = 'citation-missing';
+          fallback.textContent = pageMatch ? `p. ${pageMatch[1]}` : '';
+          if (fallback.textContent) anchor.replaceWith(fallback);
+          else anchor.remove();
+        }
+        return;
+      }
 
       anchor.classList.add('citation-source-link');
       anchor.setAttribute('target', '_blank');
@@ -1029,10 +1044,10 @@ document.addEventListener('DOMContentLoaded', () => {
         <button class="quick-prompt-card" data-prompt="Analyze the Scope 1 and Scope 2 emissions trend for Infosys Limited from 2025 to 2026. Include a line chart with your analysis.">
           <span class="prompt-text">Infosys emissions trend</span>
         </button>
-        <button class="quick-prompt-card" data-prompt="Analyze average carbon emissions intensity across all sectors in 2025. Rank sectors and show a pie chart of sector share.">
+        <button class="quick-prompt-card" data-prompt="Analyze average carbon emissions intensity across all sectors in 2025. Rank sectors and show a bar chart.">
           <span class="prompt-text">Carbon intensity by sector</span>
         </button>
-        <button class="quick-prompt-card" id="customXmlPrompt" data-prompt="Analyze the top 5 companies with the highest female employee share in 2025. Show a bar chart and a pie chart of their relative shares.">
+        <button class="quick-prompt-card" id="customXmlPrompt" data-prompt="Analyze the top 5 companies with the highest female employee share in 2025. Show a bar chart.">
           <span class="prompt-text">Top companies by female workforce share</span>
         </button>
       </div>

@@ -12,6 +12,24 @@ const METADATA_PATH = process.env.METADATA_PATH
 /** Same-origin mount for downloaded PDFs (see server.js). */
 export const LOCAL_PDF_MOUNT = '/local-pdf';
 
+/** True when a URL is safe to open/index as a BRSR PDF (not XBRL/XML or NSE /null). */
+export function isUsablePdfUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  const bare = String(url).trim().split('#')[0].split('?')[0];
+  if (!bare) return false;
+  if (/\/null$/i.test(bare) || /\/corporate\/null$/i.test(bare)) return false;
+  if (/\.(xml|xbrl)$/i.test(bare) || /\/xbrl\//i.test(bare)) return false;
+  if (bare.startsWith(LOCAL_PDF_MOUNT + '/')) {
+    return /\.pdf$/i.test(bare);
+  }
+  try {
+    const pathname = new URL(bare).pathname;
+    return /\.pdf$/i.test(pathname);
+  } catch {
+    return /\.pdf$/i.test(bare);
+  }
+}
+
 /** DB metric columns that can be cited with page numbers. */
 export const CITABLE_METRICS = [
   'scope1_emissions',
@@ -58,7 +76,7 @@ function loadMetadataIndex() {
       companyName: filing.companyName,
       symbol: filing.symbol,
       year: filing.fyTo ?? filing.fyFrom,
-      pdfUrl: filing.attachmentFile || null,
+      pdfUrl: isUsablePdfUrl(filing.attachmentFile) ? filing.attachmentFile : null,
       xbrlUrl: filing.xbrlFile || null,
       submissionDate: filing.submissionDate || null,
     };
@@ -136,14 +154,14 @@ export function resolveRemotePdfUrlForRow(row) {
     if (url.startsWith(LOCAL_PDF_MOUNT)) continue;
     if (/\.r2\.dev\//i.test(url) || /r2\.cloudflarestorage\.com\//i.test(url)) continue;
     if (/huggingface\.co\//i.test(url)) continue;
-    if (/^https?:\/\//i.test(url) && /\.pdf$/i.test(url.split('?')[0])) return url;
+    if (/^https?:\/\//i.test(url) && isUsablePdfUrl(url)) return url;
   }
   const meta = lookupNseMetadata({
     filename: row?.filename,
     company: row?.company,
     year: row?.year,
   });
-  return meta?.pdfUrl || null;
+  return isUsablePdfUrl(meta?.pdfUrl) ? meta.pdfUrl : null;
 }
 
 /**
@@ -180,12 +198,12 @@ export function resolvePdfUrlForRow(row) {
 
   // Already a local public URL from a prior enrich step
   for (const candidate of [row?.report_pdf_url, row?.pdf_url]) {
-    if (candidate && String(candidate).startsWith(LOCAL_PDF_MOUNT)) {
+    if (candidate && isUsablePdfUrl(candidate) && String(candidate).startsWith(LOCAL_PDF_MOUNT)) {
       return String(candidate).split('#')[0];
     }
   }
 
-  return remoteUrl;
+  return isUsablePdfUrl(remoteUrl) ? remoteUrl : null;
 }
 
 /** SQL aliases that mean this row is a computed aggregate, not a company filing. */
@@ -232,7 +250,8 @@ export function buildSourcesPayload(row, metricPages = null) {
   delete usablePages.__pdf_unavailable;
 
   const pdfUrl = pdfUnavailable ? null : resolvePdfUrlForRow(row);
-  const xbrlUrl = row.xbrl_url || row.report_xbrl_url || null;
+  // Keep XBRL for debugging only — never expose it next to citations (models were linking it as [source]).
+  const xbrlUrl = null;
 
   const metrics = {};
   const readyCitations = {};
@@ -242,7 +261,7 @@ export function buildSourcesPayload(row, metricPages = null) {
     const num = Number(row[metric]);
     if (!Number.isFinite(num)) continue;
     const page = usablePages[metric] ?? null;
-    const citation = pdfUrl && page ? citationMarkdown(page, pdfUrl) : null;
+    const citation = isUsablePdfUrl(pdfUrl) && page ? citationMarkdown(page, pdfUrl) : null;
     metrics[metric] = {
       value: num,
       page: citation ? page : null,
@@ -267,7 +286,7 @@ export function buildSourcesPayload(row, metricPages = null) {
     flat_fields: flatFields,
     citable,
     citation_hint: citable
-      ? 'REQUIRED citation format: p. N [source](pdf_url#page=N) — page number as plain text, [source] as the clickable link to the PDF page. Copy the exact URL from ready_citations / *_citation (Hugging Face, R2, /local-pdf/..., or NSE). Never use [report], [p. N](url), or a ## Sources footer.'
+      ? 'REQUIRED citation format: p. N [source](pdf_url#page=N) — copy the exact PDF URL from ready_citations / *_citation only. Never use XBRL/XML URLs, report_xbrl_url, [report], [p. N](url), or a ## Sources footer.'
       : 'No PDF page citations for this report. Show metric values only — do not add p. N, [source](...), or any source links.',
   };
 }
@@ -277,7 +296,7 @@ function attachMetadataUrls(row) {
     return {
       ...row,
       pdf_url: null,
-      xbrl_url: row.xbrl_url || null,
+      xbrl_url: null,
     };
   }
   const meta = lookupNseMetadata({
@@ -285,11 +304,15 @@ function attachMetadataUrls(row) {
     company: row.company,
     year: row.year,
   });
-  if (!row.pdf_url && !row.xbrl_url && !meta?.pdfUrl && !meta?.xbrlUrl) return row;
+  const pdfUrl = isUsablePdfUrl(row.pdf_url)
+    ? row.pdf_url
+    : (isUsablePdfUrl(meta?.pdfUrl) ? meta.pdfUrl : null);
+  if (!pdfUrl && !row.xbrl_url && !meta?.xbrlUrl) return { ...row, pdf_url: null };
   return {
     ...row,
-    pdf_url: row.pdf_url || meta?.pdfUrl || null,
-    xbrl_url: row.xbrl_url || meta?.xbrlUrl || null,
+    pdf_url: pdfUrl,
+    // Never surface XBRL URLs to the model — it was linking them as [source].
+    xbrl_url: null,
   };
 }
 
@@ -309,7 +332,7 @@ export function enrichSqlRows(rows, sourceRowsByKey = new Map()) {
         ...withMeta,
         ...sources.flat_fields,
         report_pdf_url: sources.report_pdf_url,
-        report_xbrl_url: sources.report_xbrl_url,
+        report_xbrl_url: null,
         sources,
         share_breakdown: shareBreakdown,
       };
@@ -340,7 +363,7 @@ export function enrichSqlRows(rows, sourceRowsByKey = new Map()) {
       ...row,
       ...sources.flat_fields,
       report_pdf_url: sources.report_pdf_url,
-      report_xbrl_url: sourceRow.xbrl_url || row.report_xbrl_url || null,
+      report_xbrl_url: null,
       sources,
       share_breakdown: shareBreakdown,
     };
@@ -372,8 +395,8 @@ export function enrichCompanyReport(reportData, sourceRow) {
     company: reportData.company,
     year: reportData.year,
     filename: sourceRow?.filename || null,
-    pdf_url: sourceRow?.pdf_url || null,
-    xbrl_url: sourceRow?.xbrl_url || null,
+    pdf_url: isUsablePdfUrl(sourceRow?.pdf_url) ? sourceRow.pdf_url : null,
+    xbrl_url: null,
     sector,
     industry,
   };
@@ -420,7 +443,7 @@ function pdfUrlWithPage(pdfUrl, page) {
 
 function citationMarkdown(page, pdfUrl) {
   // Only emit citations when both a real PDF URL and a page number exist.
-  if (!pdfUrl || page == null || Number(page) <= 0) return '';
+  if (!isUsablePdfUrl(pdfUrl) || page == null || Number(page) <= 0) return '';
   const url = pdfUrlWithPage(pdfUrl, page);
   if (!url) return '';
   return `p. ${page} [source](${url})`;
@@ -688,6 +711,17 @@ function stripMalformedCitationLinks(text) {
     .replace(/\s+p\.\s*\d+\s*source\b/gi, '');
 }
 
+/** Drop [source]/[report] links that point at XML/XBRL or other non-PDF URLs. */
+function stripNonPdfCitationLinks(text) {
+  return String(text || '').replace(
+    /(\s*)(?:(p\.\s*\d+)\s*)?\[(?:source|report)\]\(([^)]+)\)/gi,
+    (full, space, pageLabel, url) => {
+      if (isUsablePdfUrl(url)) return full;
+      return pageLabel ? `${space || ''}${pageLabel}` : '';
+    },
+  );
+}
+
 function stripMisleadingCitationsFromAggregates(text, companyNames = []) {
   return text.split('\n').map((line) => {
     if (companyNames.some((name) => name && line.includes(name))) return line;
@@ -723,6 +757,7 @@ export function upgradeReportCitations(text, sourceRows = []) {
 
   // Model often invents this label for single-company rows — always remove first.
   out = stripInventedSourceLabels(out);
+  out = stripNonPdfCitationLinks(out);
 
   const byPdf = [];
   for (const row of sourceRows) {
@@ -740,7 +775,7 @@ export function upgradeReportCitations(text, sourceRows = []) {
     const remoteUrl = resolveRemotePdfUrlForRow(row);
     const preferredPage = preferredPageForRow(pages);
     // Only cite when we have both a live PDF URL and at least one page number.
-    if (!pdfUrl || !preferredPage) continue;
+    if (!isUsablePdfUrl(pdfUrl) || !preferredPage) continue;
     byPdf.push({ row, pages, pdfUrl, remoteUrl, preferredPage });
   }
 

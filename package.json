@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "preprocess": "node agent/scripts/preprocess.js",
+    "migrate:postgres": "node agent/scripts/migrate_sqlite_to_postgres.js",
     "enrich:sources": "node agent/scripts/enrich_report_sources.js --with-pages",
     "download-reports": "node agent/scripts/download_nse_reports.js",
     "upload:r2": "node agent/scripts/upload_pdfs_to_r2.js",
@@ -36,6 +37,7 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
     "pdfjs-dist": "^4.10.38",
+    "pg": "^8.22.0",
     "puppeteer": "^25.1.0",
     "sql.js": "^1.14.1",
     "sqlite": "^5.1.1",

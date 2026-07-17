@@ -2,7 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
 import { resolveDbPath } from './paths.js';
-import { lookupNseMetadata } from './report-sources.js';
+import { lookupNseMetadata, isUsablePdfUrl } from './report-sources.js';
 import { extractMetricValuesFromRow, findMetricPagesResult, isPdfMarkedUnavailable, PDF_UNAVAILABLE_MARKER } from './page-index.js';
 
 dotenv.config();
@@ -17,10 +17,19 @@ if (!fs.existsSync(DB_DIR)) {
 
 let dbInstance = null;
 
+export function isPostgres() {
+  return Boolean(process.env.DATABASE_URL);
+}
+
 export async function getDb() {
   if (dbInstance) return dbInstance;
 
-  if (process.env.VERCEL) {
+  if (process.env.DATABASE_URL) {
+    console.log('Initializing database using Neon Postgres (DATABASE_URL)...');
+    const { createPgPool, PgDatabase } = await import('./pg-client.js');
+    const pool = createPgPool(process.env.DATABASE_URL);
+    dbInstance = new PgDatabase(pool);
+  } else if (process.env.VERCEL) {
     console.log("Initializing database using sql.js for Vercel...");
     const initSqlJs = (await import('sql.js')).default;
     const path = (await import('path')).default;
@@ -46,6 +55,7 @@ export async function getDb() {
       constructor(db, filePath) {
         this.db = db;
         this.filePath = filePath;
+        this.dialect = 'sqlite';
       }
 
       async exec(sql) {
@@ -109,6 +119,7 @@ export async function getDb() {
       filename: DB_PATH,
       driver: sqlite3.Database
     });
+    dbInstance.dialect = 'sqlite';
   }
 
   await initDb(dbInstance);
@@ -116,51 +127,58 @@ export async function getDb() {
 }
 
 async function initDb(db) {
+  const pg = db.dialect === 'postgres';
+  const idCol = pg ? 'id SERIAL PRIMARY KEY' : 'id INTEGER PRIMARY KEY AUTOINCREMENT';
+  const real = pg ? 'DOUBLE PRECISION' : 'REAL';
+  const createdAt = pg
+    ? 'created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP'
+    : 'created_at DATETIME DEFAULT CURRENT_TIMESTAMP';
+
   // Create reports metadata & structured data table with dedicated columns for querying
   await db.exec(`
     CREATE TABLE IF NOT EXISTS reports (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ${idCol},
       company TEXT NOT NULL,
       year INTEGER NOT NULL,
       filename TEXT,
       is_custom INTEGER DEFAULT 0,
       
       -- Numeric Metrics
-      scope1_emissions REAL,
+      scope1_emissions ${real},
       scope1_unit TEXT,
-      scope2_emissions REAL,
+      scope2_emissions ${real},
       scope2_unit TEXT,
-      scope3_emissions REAL,
+      scope3_emissions ${real},
       scope3_unit TEXT,
-      energy_consumption REAL,
+      energy_consumption ${real},
       energy_unit TEXT,
-      renewable_energy_consumption REAL,
+      renewable_energy_consumption ${real},
       renewable_energy_unit TEXT,
-      renewable_energy_share REAL,
-      water_consumption REAL,
+      renewable_energy_share ${real},
+      water_consumption ${real},
       water_consumption_unit TEXT,
-      water_withdrawal REAL,
+      water_withdrawal ${real},
       water_withdrawal_unit TEXT,
-      waste_generated REAL,
+      waste_generated ${real},
       waste_unit TEXT,
       
       -- New Premium ESG Features
       sector TEXT,
       industry TEXT,
-      total_revenue REAL,
-      emissions_intensity REAL,
-      energy_intensity REAL,
-      water_intensity REAL,
-      waste_intensity REAL,
-      female_employee_count REAL,
-      total_employee_count REAL,
-      female_employee_share REAL,
-      female_board_count REAL,
-      total_board_count REAL,
-      female_board_share REAL,
-      safety_ltifr REAL,
-      water_discharge_recycled REAL,
-      waste_recovered_recycled REAL,
+      total_revenue ${real},
+      emissions_intensity ${real},
+      energy_intensity ${real},
+      water_intensity ${real},
+      waste_intensity ${real},
+      female_employee_count ${real},
+      total_employee_count ${real},
+      female_employee_share ${real},
+      female_board_count ${real},
+      total_board_count ${real},
+      female_board_share ${real},
+      safety_ltifr ${real},
+      water_discharge_recycled ${real},
+      waste_recovered_recycled ${real},
       
       -- Qualitative Text Blocks
       ghg_reduction_projects TEXT,
@@ -171,7 +189,7 @@ async function initDb(db) {
       pdf_url TEXT,
       xbrl_url TEXT,
       metric_pages_json TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      ${createdAt},
       UNIQUE(company, year)
     )
   `);
@@ -183,26 +201,37 @@ async function initDb(db) {
 }
 
 async function ensureReportSourceColumns(db) {
-  const columns = await db.all('PRAGMA table_info(reports)');
-  const names = new Set(columns.map((c) => c.name));
   const additions = [
     ['pdf_url', 'TEXT'],
     ['xbrl_url', 'TEXT'],
     ['metric_pages_json', 'TEXT'],
-    ['total_employee_count', 'REAL'],
-    ['female_board_count', 'REAL'],
-    ['total_board_count', 'REAL'],
+    ['total_employee_count', db.dialect === 'postgres' ? 'DOUBLE PRECISION' : 'REAL'],
+    ['female_board_count', db.dialect === 'postgres' ? 'DOUBLE PRECISION' : 'REAL'],
+    ['total_board_count', db.dialect === 'postgres' ? 'DOUBLE PRECISION' : 'REAL'],
   ];
 
-  for (const [name, type] of additions) {
-    if (!names.has(name)) {
-      await db.exec(`ALTER TABLE reports ADD COLUMN ${name} ${type}`);
+  if (db.dialect === 'postgres') {
+    for (const [name, type] of additions) {
+      await db.exec(`ALTER TABLE reports ADD COLUMN IF NOT EXISTS ${name} ${type}`);
+    }
+  } else {
+    const columns = await db.all('PRAGMA table_info(reports)');
+    const names = new Set(columns.map((c) => c.name));
+    for (const [name, type] of additions) {
+      if (!names.has(name)) {
+        await db.exec(`ALTER TABLE reports ADD COLUMN ${name} ${type}`);
+      }
     }
   }
 
+  // SQLite: ROUND(x, 0). Postgres: ROUND only takes (numeric, int) — cast doubles.
+  const roundExpr = db.dialect === 'postgres'
+    ? 'ROUND((female_employee_count / (female_employee_share / 100.0))::numeric, 0)'
+    : 'ROUND(female_employee_count / (female_employee_share / 100.0), 0)';
+
   await db.run(`
     UPDATE reports
-    SET total_employee_count = ROUND(female_employee_count / (female_employee_share / 100.0), 0)
+    SET total_employee_count = ${roundExpr}
     WHERE total_employee_count IS NULL
       AND female_employee_count IS NOT NULL
       AND female_employee_share > 0
@@ -214,12 +243,13 @@ export async function syncReportSourceUrls(company, year, filename) {
   const meta = lookupNseMetadata({ filename, company, year });
   if (!meta?.pdfUrl && !meta?.xbrlUrl) return null;
 
+  const pdfUrl = isUsablePdfUrl(meta.pdfUrl) ? meta.pdfUrl : null;
   await db.run(
     `UPDATE reports
      SET pdf_url = COALESCE(?, pdf_url),
          xbrl_url = COALESCE(?, xbrl_url)
      WHERE company = ? AND year = ?`,
-    [meta.pdfUrl, meta.xbrlUrl, company, year],
+    [pdfUrl, meta.xbrlUrl || null, company, year],
   );
 
   return meta;
@@ -279,7 +309,7 @@ function rowForCitations(row, pages, pdfUnavailable) {
 
 export async function ensureMetricPagesIndexed(company, year) {
   const row = await getReportSourceRow(company, year);
-  if (!row?.pdf_url) return row;
+  if (!row?.pdf_url || !isUsablePdfUrl(row.pdf_url)) return row ? { ...row, pdf_url: isUsablePdfUrl(row.pdf_url) ? row.pdf_url : null } : row;
 
   let existingPages = null;
   if (row.metric_pages_json) {

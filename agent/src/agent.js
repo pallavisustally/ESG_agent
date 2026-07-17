@@ -1,9 +1,19 @@
 import dotenv from 'dotenv';
-import { getReportData, getCompanyList, getAvailableReports, getDb, ensureMetricPagesIndexed, getSourceRowsForReports, resolveCompanyYear } from './db.js';
+import { getReportData, getCompanyList, getAvailableReports, getDb, ensureMetricPagesIndexed, getSourceRowsForReports, resolveCompanyYear, isPostgres } from './db.js';
 import { SYSTEM_PROMPT } from './system-prompt.js';
 import { callOllamaChat, getOllamaConfig } from './ollama-client.js';
 import { enrichSqlRows, enrichCompanyReport, upgradeReportCitations } from './report-sources.js';
 import { verifyAgentCitations } from './pdf-verifier.js';
+import {
+  sanitizeMetricOrderQuery,
+  filterRankingRows,
+  detectFemaleShareRankingIntent,
+  buildFemaleShareRankingSql,
+  rankingLooksInvalid,
+  findUnknownSqlColumns,
+  listReportsColumns,
+  hasUnsupportedMetricQualifier,
+} from './sql-sanitize.js';
 
 dotenv.config();
 
@@ -202,7 +212,7 @@ export async function runAgent({
           properties: {
             query: {
               type: 'string',
-              description: 'The complete read-only SQL SELECT query to run (e.g. "SELECT company, scope1_emissions FROM reports WHERE year = 2026 ORDER BY scope1_emissions DESC").'
+              description: 'Read-only SQL SELECT on reports using only real schema columns (company, year, sector, industry, scope1/2/3_emissions, energy_consumption, renewable_energy_share, water_consumption, waste_generated, *_intensity, female_employee_count/share, female_board_count/share, safety_ltifr, total_revenue, …). Example pattern: SELECT company, year, <metric> FROM reports WHERE year = 2025 AND <metric> IS NOT NULL AND <metric> > 0 ORDER BY <metric> DESC LIMIT 5. Never invent columns; if the asked metric is not in the schema, do not query a substitute.'
             }
           },
           required: ['query']
@@ -319,19 +329,52 @@ export async function runAgent({
       }
       
       try {
+        const unknownCols = findUnknownSqlColumns(query);
+        if (unknownCols.length) {
+          return {
+            error:
+              `Unknown column(s) in SQL: ${unknownCols.join(', ')}. `
+              + `Available reports columns: ${listReportsColumns()}. `
+              + 'If the user asked for a metric not in this list, do NOT substitute a related column — '
+              + 'reply in 1–2 short sentences that the metric is not available (no Executive Summary headings).',
+            unavailable_columns: unknownCols,
+            available_columns: listReportsColumns().split(', '),
+          };
+        }
+
+        // Block silent substitutes: e.g. "disabled female workers" → female_employee_count ranking.
+        if (
+          hasUnsupportedMetricQualifier(userMessage)
+          && /\bfemale_employee_(count|share)\b/i.test(query)
+          && /\b(disabled|differently|pwd|handicap|impair|permanent|temporary|contract|migrant|caste|tribal|supplier|csr|training)\b/i.test(userMessage)
+        ) {
+          return {
+            error:
+              'The user asked for a workforce/diversity slice that is not stored as its own column. '
+              + 'Do NOT query female_employee_count or female_employee_share as a substitute. '
+              + 'Reply in 1–2 short sentences that this metric is not available (no Executive Summary headings), '
+              + 'and optionally list closest available columns (e.g. female_employee_share, female_employee_count). '
+              + `Available columns: ${listReportsColumns()}`,
+          };
+        }
+
         const db = await getDb();
-        const rewritten = ensureCompanyYearInSelect(relaxCompanyExactMatch(query));
+        const fuzzy = ensureCompanyYearInSelect(relaxCompanyExactMatch(query));
+        let { sql: rewritten, orderColumn, orderDir, limit: rankingLimit } = sanitizeMetricOrderQuery(fuzzy, {
+          postgres: isPostgres() || db.dialect === 'postgres',
+          userMessage,
+        });
         if (onProgress && rewritten !== query.trim().replace(/;+\s*$/, '')) {
           onProgress({
             status: 'tool_start',
             tool: 'execute_sql_query',
-            message: `Rewrote company filter for fuzzy match: "${rewritten}"`,
+            message: `Rewrote SQL for ranking/fuzzy match: "${rewritten}"`,
           });
         }
         const { companyHint, yearHint } = extractCompanyYearHints(rewritten);
-        const rows = await db.all(rewritten);
+        let rows = await db.all(rewritten);
 
-        const normalizedRows = rows.map((row) => ({
+        let normalizedRows = rows.map((row) => ({
           ...row,
           company: row.company || companyHint || row.Company || null,
           year: row.year ?? yearHint ?? row.Year ?? null,
@@ -342,25 +385,66 @@ export async function runAgent({
           return true;
         });
 
+        if (orderColumn) {
+          normalizedRows = filterRankingRows(normalizedRows, orderColumn, orderDir);
+          if (rankingLimit != null) {
+            normalizedRows = normalizedRows.slice(0, rankingLimit);
+          }
+        }
+
+        // Hard fallback: top female *share* questions must not return count/zero junk.
+        if (detectFemaleShareRankingIntent(userMessage)) {
+          const year = yearHint ?? (requestedYears.length === 1 ? requestedYears[0] : null);
+          const needsFallback = rankingLooksInvalid(normalizedRows, 'female_employee_share', {
+            minRows: Math.min(rankingLimit || 5, 3),
+          }) || orderColumn !== 'female_employee_share';
+          if (needsFallback && year) {
+            const fallbackSql = buildFemaleShareRankingSql(year, rankingLimit || 5);
+            if (fallbackSql) {
+              if (onProgress) {
+                onProgress({
+                  status: 'tool_start',
+                  tool: 'execute_sql_query',
+                  message: `Corrected ranking to female_employee_share for year ${year}`,
+                });
+              }
+              rows = await db.all(fallbackSql);
+              orderColumn = 'female_employee_share';
+              orderDir = 'DESC';
+              rankingLimit = rankingLimit || 5;
+              normalizedRows = filterRankingRows(rows, orderColumn, orderDir).slice(0, rankingLimit);
+            }
+          }
+        }
+
         if (!normalizedRows.length && rows.length) {
           return {
-            error: `Query returned rows, but none matched requested year(s) ${requestedYears.join(', ') || yearHint}. Re-run with WHERE year = <requested year>.`,
+            error: `Query returned rows, but none matched requested year(s) ${requestedYears.join(', ') || yearHint} with valid ranking values. Re-run with WHERE year = <requested year> AND <metric> IS NOT NULL AND <metric> > 0.`,
             raw_years_seen: [...new Set(rows.map((r) => r.year).filter((y) => y != null))],
           };
         }
 
         const sourceRowsByKey = await getSourceRowsForReports(normalizedRows);
-        const preferred = preferPdfBackedRows(normalizedRows, sourceRowsByKey);
+        // For metric rankings, keep metric order — do not reshuffle toward PDF-only sparse rows.
+        const preferred = orderColumn
+          ? normalizedRows
+          : preferPdfBackedRows(normalizedRows, sourceRowsByKey);
         for (const sourceRow of sourceRowsByKey.values()) {
           seenSourceRows.push(sourceRow);
         }
-        const enrichedRows = enrichSqlRows(preferred.length ? preferred : normalizedRows, sourceRowsByKey);
+        let enrichedRows = enrichSqlRows(preferred.length ? preferred : normalizedRows, sourceRowsByKey);
+        if (orderColumn) {
+          enrichedRows = filterRankingRows(enrichedRows, orderColumn, orderDir);
+          if (rankingLimit != null) {
+            enrichedRows = enrichedRows.slice(0, rankingLimit);
+          }
+        }
         
         if (onProgress) {
           onProgress({ 
             status: 'tool_end', 
             tool: 'execute_sql_query', 
-            message: `Retrieved ${rows.length} rows.`
+            message: `Retrieved ${enrichedRows.length} rows.`
           });
         }
         
@@ -373,7 +457,10 @@ export async function runAgent({
             message: `Execution failed: ${err.message}`
           });
         }
-        return { error: `SQL execution error: ${err.message}` };
+        const hint = /column|does not exist|no such column/i.test(err.message)
+          ? ` Available reports columns: ${listReportsColumns()}. If the asked metric is not listed, reply in 1–2 short sentences that it is not available (no Executive Summary headings) — do not substitute another metric.`
+          : '';
+        return { error: `SQL execution error: ${err.message}.${hint}` };
       }
     }
   };
@@ -442,7 +529,7 @@ export async function runAgent({
               ...messages,
               {
                 role: 'user',
-                content: 'Using the tool results already available, provide the final structured analysis now. Include page citations and PDF links only when tool results provide <metric>_citation / ready_citations; otherwise show metric values only with no source links. Do not call more tools.',
+                content: 'Using the tool results already available, provide the final answer now. If the asked metric is unavailable or out-of-box, reply in 1–2 short sentences only (no Executive Summary / Key Findings / Analysis / Recommendation headings). Otherwise use the structured analysis format. Include page citations and PDF links only when tool results provide <metric>_citation / ready_citations; otherwise show metric values only with no source links. Do not call more tools.',
               },
             ]
           : messages,

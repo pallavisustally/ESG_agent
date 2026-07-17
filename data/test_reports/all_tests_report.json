@@ -1,16 +1,16 @@
 {
-  "generatedAt": "2026-07-09T16:38:35.888Z",
+  "generatedAt": "2026-07-15T11:12:12.005Z",
   "total": 18,
-  "passed": 18,
-  "failed": 0,
+  "passed": 16,
+  "failed": 2,
   "skipped": 2,
-  "passRate": "112.5%",
+  "passRate": "100.0%",
   "results": [
     {
       "section": "Infrastructure",
       "name": "Database connected",
-      "pass": true,
-      "reportCount": 5666
+      "pass": false,
+      "error": "getaddrinfo ENOTFOUND ep-restless-king-atwc54fd.c-9.us-east-1.aws.neon.tech"
     },
     {
       "section": "Infrastructure",
@@ -35,34 +35,9 @@
     },
     {
       "section": "Auth",
-      "name": "Save multiple chat sessions for user",
-      "pass": true,
-      "sessionCount": 9
-    },
-    {
-      "section": "Auth",
-      "name": "Session A history preserved",
-      "pass": true
-    },
-    {
-      "section": "Auth",
-      "name": "Session B history preserved",
-      "pass": true
-    },
-    {
-      "section": "Auth",
-      "name": "Sessions are isolated (different titles)",
-      "pass": true
-    },
-    {
-      "section": "Auth",
-      "name": "Migrate local sessions on sign-in",
-      "pass": true
-    },
-    {
-      "section": "Auth",
-      "name": "Delete chat session",
-      "pass": true
+      "name": "Chat session persistence",
+      "pass": false,
+      "error": "getaddrinfo ENOTFOUND ep-restless-king-atwc54fd.c-9.us-east-1.aws.neon.tech"
     },
     {
       "section": "Auth",
@@ -80,7 +55,38 @@
       "section": "Sanitizer",
       "name": "Strip misleading PDF citations from sector aggregate lines",
       "pass": true,
-      "cleanedPreview": "### Materials\n- **Average emissions intensity:** 20.89 tCO2e per unit\n### Industrials\n- **Average emissions intensity:** 0.00000165 tCO2e per unit p. 3"
+      "cleanedPreview": "### Materials\n- **Average emissions intensity:** 20.89 tCO2e per unit p. 15\n### Industrials\n- **Average emissions intensity:** 0.00000165 tCO2e per unit p. 3"
+    },
+    {
+      "section": "Sanitizer",
+      "name": "Ranking SQL adds NULL/zero filters and NULLS LAST",
+      "pass": true,
+      "rewritten": "SELECT company, year, female_employee_share FROM reports WHERE female_employee_share IS NOT NULL AND female_employee_share > 0 AND total_employee_count > 0 AND company IS NOT NULL AND lower(company) NOT LIKE '%unknown%' AND  year = 2025 ORDER BY female_employee_share DESC NULLS LAST LIMIT 15"
+    },
+    {
+      "section": "Sanitizer",
+      "name": "Share question forces ORDER BY female_employee_share not count",
+      "pass": true,
+      "rewritten": "SELECT female_employee_share, total_employee_count, company, female_employee_count FROM reports WHERE female_employee_share IS NOT NULL AND female_employee_share > 0 AND total_employee_count > 0 AND company IS NOT NULL AND lower(company) NOT LIKE '%unknown%' AND  year = 2025 ORDER BY female_employee_share DESC NULLS LAST LIMIT 15"
+    },
+    {
+      "section": "Sanitizer",
+      "name": "Unsupported metric qualifiers skip female-share rewrite/fallback",
+      "pass": true
+    },
+    {
+      "section": "Sanitizer",
+      "name": "Unknown SQL columns detected; real schema columns accepted",
+      "pass": true
+    },
+    {
+      "section": "Sanitizer",
+      "name": "Ranking rows drop null/zero and dedupe company names",
+      "pass": true,
+      "ranked": [
+        "Aditya Birla Fashion and Retail Limited",
+        "Rainbow Childrens Medicare Limited"
+      ]
     },
     {
       "section": "Sanitizer",
