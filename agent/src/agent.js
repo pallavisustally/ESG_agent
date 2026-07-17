@@ -34,6 +34,26 @@ function trimChatHistory(chatHistory, maxTurns) {
   return userAssistant.slice(-maxTurns);
 }
 
+/** User-facing status text — never expose raw SQL in the UI. */
+function friendlySqlStatus(query = '', phase = 'start') {
+  const q = String(query).toLowerCase();
+  if (phase === 'rewrite') return 'Refining the search for accurate rankings…';
+  if (phase === 'fallback') return 'Correcting the ranking to match your question…';
+  if (phase === 'done') return 'Gathered the matching report data.';
+
+  if (/female_employee_share/.test(q)) return 'Comparing female employee share across companies…';
+  if (/female_board_share/.test(q)) return 'Comparing board gender diversity…';
+  if (/female_employee_count|total_employee_count/.test(q)) return 'Looking up workforce diversity figures…';
+  if (/scope_?1|scope_?2|scope_?3|emissions_intensity/.test(q)) return 'Looking up greenhouse gas emissions…';
+  if (/renewable_energy|energy_consumption|energy_intensity/.test(q)) return 'Checking energy and renewable metrics…';
+  if (/water_consumption|water_intensity/.test(q)) return 'Checking water consumption metrics…';
+  if (/waste_generated|waste_intensity/.test(q)) return 'Checking waste generation metrics…';
+  if (/safety_ltifr/.test(q)) return 'Looking up workplace safety metrics…';
+  if (/sector|industry/.test(q)) return 'Comparing companies by sector and industry…';
+  if (/order by/.test(q)) return 'Ranking companies from the BRSR reports…';
+  return 'Querying BRSR sustainability reports…';
+}
+
 function dedupeToolCalls(toolCalls = []) {
   const seen = new Set();
   const unique = [];
@@ -324,7 +344,7 @@ export async function runAgent({
         onProgress({ 
           status: 'tool_start', 
           tool: 'execute_sql_query', 
-          message: `Executing read-only SQL: "${query}"`
+          message: friendlySqlStatus(query, 'start'),
         });
       }
       
@@ -368,7 +388,7 @@ export async function runAgent({
           onProgress({
             status: 'tool_start',
             tool: 'execute_sql_query',
-            message: `Rewrote SQL for ranking/fuzzy match: "${rewritten}"`,
+            message: friendlySqlStatus(rewritten, 'rewrite'),
           });
         }
         const { companyHint, yearHint } = extractCompanyYearHints(rewritten);
@@ -405,7 +425,7 @@ export async function runAgent({
                 onProgress({
                   status: 'tool_start',
                   tool: 'execute_sql_query',
-                  message: `Corrected ranking to female_employee_share for year ${year}`,
+                  message: friendlySqlStatus('', 'fallback'),
                 });
               }
               rows = await db.all(fallbackSql);
@@ -444,7 +464,9 @@ export async function runAgent({
           onProgress({ 
             status: 'tool_end', 
             tool: 'execute_sql_query', 
-            message: `Retrieved ${enrichedRows.length} rows.`
+            message: enrichedRows.length
+              ? `Found ${enrichedRows.length} matching result${enrichedRows.length === 1 ? '' : 's'}.`
+              : 'No matching rows found.',
           });
         }
         

@@ -1366,6 +1366,18 @@ document.addEventListener('DOMContentLoaded', () => {
     if (status === 'thinking') agentStatusText.classList.add('thinking');
   }
 
+  // Never show raw SQL in the chat loading status line.
+  function friendlyStatusMessage(message, tool) {
+    const text = String(message || '').trim();
+    const looksLikeSql = /\b(SELECT|INSERT|UPDATE|DELETE|FROM\s+\w+|ORDER\s+BY|WHERE\s+)/i.test(text)
+      || /Rewrote SQL|Executing read-only SQL/i.test(text);
+    if (looksLikeSql) {
+      if (tool === 'execute_sql_query') return 'Looking up the matching BRSR metrics…';
+      return 'Working through your question…';
+    }
+    return text || (tool ? `Running ${tool}…` : 'Analyzing…');
+  }
+
   // Log Step to Reasoning Panel (panel stays hidden unless user opens it)
   function logReasoningStep(stepData) {
     // Do not auto-open agentLogsPanel — keeps UI focused on the answer
@@ -1546,7 +1558,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 setAgentStatus('thinking', data.tool);
                 logReasoningStep(data);
                 const statusLine = assistantBubble.querySelector('.status-line');
-                if (statusLine) statusLine.textContent = data.message || `Running ${data.tool}...`;
+                if (statusLine) statusLine.textContent = friendlyStatusMessage(data.message, data.tool);
               } else if (data.status === 'tool_end') {
                 logReasoningStep(data);
               } else if (data.status === 'answer_start') {
