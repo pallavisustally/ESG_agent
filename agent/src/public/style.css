@@ -771,7 +771,7 @@ html, body {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: opacity 0.15s, transform 0.15s;
+  transition: opacity 0.15s, transform 0.15s, background 0.15s;
 }
 
 [data-theme="dark"] .send-btn {
@@ -786,6 +786,60 @@ html, body {
 
 .send-btn:not(:disabled):hover { transform: scale(1.05); }
 .send-btn i { width: 20px; height: 20px; }
+
+.send-btn[data-mode="stop"] {
+  background: var(--text);
+  color: var(--bg-surface);
+  opacity: 1;
+  cursor: pointer;
+}
+
+[data-theme="dark"] .send-btn[data-mode="stop"] {
+  background: #e8eaed;
+  color: #131314;
+}
+
+.send-btn[data-mode="stop"] i {
+  width: 14px;
+  height: 14px;
+}
+
+.continue-bar {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 10px;
+}
+
+.continue-bar.hidden {
+  display: none;
+}
+
+.continue-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, transform 0.15s;
+}
+
+.continue-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--text-muted);
+  transform: translateY(-1px);
+}
+
+.continue-btn i {
+  width: 16px;
+  height: 16px;
+}
 
 .attach-btn { color: var(--text-muted); }
 .attach-btn:hover { color: var(--text); background: var(--bg-hover); }

@@ -140,13 +140,19 @@
           <div class="logs-content" id="logsContent"></div>
         </div>
 
+        <div id="continueBar" class="continue-bar hidden">
+          <button id="continueBtn" class="continue-btn" type="button" aria-label="Continue generating">
+            <i data-lucide="play"></i>
+            <span>Continue</span>
+          </button>
+        </div>
         <div class="input-pill">
           <input type="file" id="fileInput" accept=".xml,.xbrl" class="hidden-file-input">
           <button id="attachBtn" class="icon-btn attach-btn" title="Upload BRSR XML">
             <i data-lucide="plus"></i>
           </button>
           <textarea id="chatInput" placeholder="Ask about emissions, water, diversity, sectors…" rows="1"></textarea>
-          <button id="sendBtn" class="send-btn" disabled aria-label="Send">
+          <button id="sendBtn" class="send-btn" disabled aria-label="Send" data-mode="send">
             <i data-lucide="arrow-up"></i>
           </button>
         </div>

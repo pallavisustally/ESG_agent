@@ -360,7 +360,16 @@ app.post('/api/chat', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
+  const abortController = new AbortController();
+  const onClientClose = () => {
+    if (!res.writableEnded) {
+      abortController.abort();
+    }
+  };
+  req.on('close', onClientClose);
+
   const sendEvent = (data) => {
+    if (res.writableEnded) return;
     res.write(`data: ${JSON.stringify(data)}\n\n`);
   };
 
@@ -370,6 +379,7 @@ app.post('/api/chat', async (req, res) => {
       chatHistory,
       modelName,
       ollamaHost,
+      signal: abortController.signal,
       onProgress: (progress) => {
         sendEvent(progress);
       }
@@ -427,12 +437,29 @@ app.post('/api/chat', async (req, res) => {
     });
 
   } catch (error) {
+    const aborted = abortController.signal.aborted
+      || error?.name === 'AbortError'
+      || error?.aborted === true;
+
+    if (aborted) {
+      console.log('[Agent] Generation stopped by client.');
+      sendEvent({
+        status: 'stopped',
+        text: error?.partialText || '',
+        message: 'Generation stopped'
+      });
+      res.end();
+      return;
+    }
+
     console.error('Agent chat error:', error);
     sendEvent({
       status: 'error',
       message: error.message
     });
     res.end();
+  } finally {
+    req.off('close', onClientClose);
   }
 });
 

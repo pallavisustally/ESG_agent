@@ -173,6 +173,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentUser = null;
   let authEnabled = false;
   let firebaseAuth = null;
+  let activeAbortController = null;
+  let canContinue = false;
+  const CONTINUE_PROMPT = 'Please continue your previous response from where you left off.';
 
   function isSignedIn() {
     return Boolean(currentUser);
@@ -243,6 +246,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const chatContainer = document.getElementById('chatContainer');
   const chatInput = document.getElementById('chatInput');
   const sendBtn = document.getElementById('sendBtn');
+  const continueBar = document.getElementById('continueBar');
+  const continueBtn = document.getElementById('continueBtn');
   const agentStatusText = document.getElementById('agentStatusText');
   const agentLogsPanel = document.getElementById('agentLogsPanel');
   const closeLogsBtn = document.getElementById('closeLogsBtn');
@@ -723,6 +728,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const session = sessions.find(s => s.id === id);
     if (!session) return;
 
+    if (activeAbortController) {
+      activeAbortController.abort();
+      activeAbortController = null;
+    }
+    isThinking = false;
+    setContinueVisible(false);
+    setSendButtonMode('send');
+
     currentSessionId = session.id;
     chatHistory = [...session.history];
 
@@ -762,6 +775,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Start New Chat Session
   function startNewChat() {
+    if (activeAbortController) {
+      activeAbortController.abort();
+      activeAbortController = null;
+    }
+    isThinking = false;
+    setContinueVisible(false);
+    setSendButtonMode('send');
     currentSessionId = null;
     chatHistory = [];
     chatContainer.innerHTML = '';
@@ -774,21 +794,68 @@ document.addEventListener('DOMContentLoaded', () => {
   // Attach elements click events
   newChatBtn.addEventListener('click', startNewChat);
 
+  function setSendButtonMode(mode) {
+    sendBtn.dataset.mode = mode;
+    if (mode === 'stop') {
+      sendBtn.disabled = false;
+      sendBtn.setAttribute('aria-label', 'Stop generating');
+      sendBtn.title = 'Stop';
+      sendBtn.innerHTML = '<i data-lucide="square"></i>';
+    } else {
+      sendBtn.setAttribute('aria-label', 'Send');
+      sendBtn.title = 'Send';
+      sendBtn.innerHTML = '<i data-lucide="arrow-up"></i>';
+      sendBtn.disabled = chatInput.value.trim().length === 0 || isThinking;
+    }
+    lucide.createIcons();
+  }
+
+  function setContinueVisible(visible) {
+    canContinue = Boolean(visible);
+    if (!continueBar) return;
+    continueBar.classList.toggle('hidden', !canContinue);
+    if (canContinue) lucide.createIcons();
+  }
+
+  function stopGenerating() {
+    if (!isThinking || !activeAbortController) return;
+    activeAbortController.abort();
+  }
+
   // Textarea Auto-Resize and Send Trigger
   chatInput.addEventListener('input', () => {
     chatInput.style.height = 'auto';
     chatInput.style.height = (chatInput.scrollHeight) + 'px';
-    sendBtn.disabled = chatInput.value.trim().length === 0 || isThinking;
+    if (sendBtn.dataset.mode !== 'stop') {
+      sendBtn.disabled = chatInput.value.trim().length === 0 || isThinking;
+    }
   });
 
   chatInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
+      if (isThinking) return;
       sendMessage();
     }
   });
 
-  sendBtn.addEventListener('click', sendMessage);
+  sendBtn.addEventListener('click', () => {
+    if (sendBtn.dataset.mode === 'stop') {
+      stopGenerating();
+      return;
+    }
+    sendMessage();
+  });
+
+  if (continueBtn) {
+    continueBtn.addEventListener('click', () => {
+      if (isThinking || !canContinue) return;
+      setContinueVisible(false);
+      chatInput.value = CONTINUE_PROMPT;
+      chatInput.dispatchEvent(new Event('input'));
+      sendMessage();
+    });
+  }
 
   // Close Agent Logs Panel
   closeLogsBtn.addEventListener('click', () => {
@@ -1419,9 +1486,12 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!text || isThinking) return;
 
     isThinking = true;
+    setContinueVisible(false);
     chatInput.value = '';
     chatInput.style.height = 'auto';
-    sendBtn.disabled = true;
+    setSendButtonMode('stop');
+    activeAbortController = new AbortController();
+    const { signal } = activeAbortController;
     logsContent.innerHTML = '';
 
     // Log the user question to reasoning logs
@@ -1484,6 +1554,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Step state tracking
     let activeStepRow = null;
     let streamBuffer = '';
+    let finishedNormally = false;
 
     function completeActiveStep(isError = false) {
       if (activeStepRow) {
@@ -1519,11 +1590,56 @@ document.addEventListener('DOMContentLoaded', () => {
       return stepRow;
     }
 
+    function finalizeIdleUi(statusText = 'Ready') {
+      setAgentStatus('idle', statusText);
+      isThinking = false;
+      activeAbortController = null;
+      setSendButtonMode('send');
+    }
+
+    function markThoughtStopped() {
+      completeActiveStep(true);
+      const brainIcon = assistantBubble.querySelector('.thought-brain-icon');
+      if (brainIcon) {
+        brainIcon.classList.remove('thinking');
+        brainIcon.setAttribute('data-lucide', 'stop-circle');
+      }
+      const headerText = assistantBubble.querySelector('.thought-header-text');
+      if (headerText) {
+        headerText.textContent = 'Generation stopped';
+      }
+      if (thoughtContainer) {
+        thoughtContainer.classList.add('collapsed');
+      }
+      lucide.createIcons();
+    }
+
+    function handleStopped(partialText = '') {
+      const answer = String(partialText || streamBuffer || '').trim();
+      markThoughtStopped();
+
+      if (answer) {
+        renderAssistantBubble(assistantBubble, answer);
+        chatHistory.push({ role: 'assistant', content: answer });
+        saveCurrentSession();
+        setContinueVisible(true);
+        finalizeIdleUi('Stopped — continue available');
+      } else {
+        const contentTextElement = assistantBubble.querySelector('.assistant-content-text');
+        if (contentTextElement) {
+          contentTextElement.innerHTML = `<p class="preparing-text">Generation stopped. Click Continue to resume, or send a new prompt.</p>`;
+        }
+        setContinueVisible(true);
+        finalizeIdleUi('Stopped — continue available');
+      }
+    }
+
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
+        body: JSON.stringify(requestBody),
+        signal,
       });
 
       if (!response.ok) {
@@ -1535,6 +1651,11 @@ document.addEventListener('DOMContentLoaded', () => {
       let buffer = '';
 
       while (true) {
+        if (signal.aborted) {
+          try { await reader.cancel(); } catch { /* ignore */ }
+          break;
+        }
+
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -1588,6 +1709,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 streamBuffer += data.delta;
                 targetElement.textContent = maskCitationsForStreaming(streamBuffer);
                 chatContainer.scrollTop = chatContainer.scrollHeight;
+              } else if (data.status === 'stopped') {
+                handleStopped(data.text || streamBuffer);
+                finishedNormally = true;
               } else if (data.status === 'done') {
                 completeActiveStep();
                 
@@ -1615,14 +1739,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Save the session
                 saveCurrentSession();
                 
-                setAgentStatus('idle', 'Ready');
-                isThinking = false;
-                sendBtn.disabled = chatInput.value.trim().length === 0;
+                setContinueVisible(false);
+                finalizeIdleUi('Ready');
+                finishedNormally = true;
               } else if (data.status === 'error') {
                 throw new Error(data.message);
               }
             } catch (err) {
-              if (data?.status === 'error' || data?.status === 'done') {
+              if (data?.status === 'error' || data?.status === 'done' || data?.status === 'stopped') {
                 throw err;
               }
               console.error('Failed to process stream chunk:', err, jsonStr);
@@ -1631,7 +1755,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
+      if (!finishedNormally && signal.aborted) {
+        handleStopped(streamBuffer);
+      } else if (!finishedNormally) {
+        // Stream ended without done/stopped — treat as incomplete
+        if (streamBuffer.trim()) {
+          handleStopped(streamBuffer);
+        } else {
+          throw new Error('Connection closed before the agent finished.');
+        }
+      }
+
     } catch (error) {
+      if (error?.name === 'AbortError' || signal.aborted) {
+        handleStopped(streamBuffer);
+        return;
+      }
+
       console.error('Failed to communicate with agent:', error);
       
       completeActiveStep(true);
@@ -1656,9 +1796,8 @@ document.addEventListener('DOMContentLoaded', () => {
         assistantBubble.innerHTML = `<span style="color:#ef4444; font-weight:600;"><i data-lucide="alert-triangle" style="display:inline-block; vertical-align:middle; margin-right:6px;"></i> Error running agent loop:</span><br>${error.message}`;
       }
       
-      setAgentStatus('idle', 'Error occurred');
-      isThinking = false;
-      sendBtn.disabled = chatInput.value.trim().length === 0;
+      setContinueVisible(false);
+      finalizeIdleUi('Error occurred');
       lucide.createIcons();
     }
   }

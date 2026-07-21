@@ -167,15 +167,44 @@ export async function runAgent({
   systemInstruction = '',
   modelName = null,
   ollamaHost = null,
-  onProgress = null
+  onProgress = null,
+  signal = null
 }) {
   const config = getOllamaConfig({ modelName, ollamaHost });
   const url = config.host ? `${config.host}/api/chat` : null;
   const maxIterations = parseInt(process.env.AGENT_MAX_ITERATIONS, 10) || 5;
   const maxHistory = parseInt(process.env.AGENT_MAX_HISTORY, 10) || 4;
   let answerStreamingStarted = false;
+  let streamedText = '';
   const seenSourceRows = [];
   const requestedYears = [...new Set([...String(userMessage).matchAll(/\b(20\d{2})\b/g)].map((m) => Number(m[1])))];
+
+  function assertNotAborted() {
+    if (signal?.aborted) {
+      const err = new Error('Generation stopped');
+      err.name = 'AbortError';
+      err.aborted = true;
+      err.partialText = streamedText;
+      throw err;
+    }
+  }
+
+  function combinedSignal() {
+    const timeoutSignal = AbortSignal.timeout(config.timeoutMs);
+    if (!signal) return timeoutSignal;
+    if (typeof AbortSignal.any === 'function') {
+      return AbortSignal.any([signal, timeoutSignal]);
+    }
+    const controller = new AbortController();
+    const forward = () => controller.abort();
+    if (signal.aborted || timeoutSignal.aborted) {
+      controller.abort();
+      return controller.signal;
+    }
+    signal.addEventListener('abort', forward, { once: true });
+    timeoutSignal.addEventListener('abort', forward, { once: true });
+    return controller.signal;
+  }
 
   // Define tools for Ollama
   const tools = [
@@ -518,6 +547,7 @@ export async function runAgent({
   let iteration = 0;
 
   while (iteration < maxIterations) {
+    assertNotAborted();
     iteration++;
 
     if (onProgress) {
@@ -560,11 +590,21 @@ export async function runAgent({
         keepAlive: config.keepAlive,
         stream: useStream,
         onToken: useStream
-          ? (delta) => onProgress?.({ status: 'token', delta })
+          ? (delta) => {
+              streamedText += delta;
+              onProgress?.({ status: 'token', delta });
+            }
           : undefined,
-        signal: AbortSignal.timeout(config.timeoutMs),
+        signal: combinedSignal(),
       });
     } catch (fetchErr) {
+      if (signal?.aborted) {
+        const err = new Error('Generation stopped');
+        err.name = 'AbortError';
+        err.aborted = true;
+        err.partialText = streamedText || fetchErr?.partialText || '';
+        throw err;
+      }
       console.error('Fetch error calling LLM:', fetchErr);
       const providerHint = config.provider === 'openai'
         ? `OpenAI model "${config.model}" may be unavailable. Check OPENAI_API_KEY and OPENAI_MODEL in .env.`
@@ -588,6 +628,7 @@ export async function runAgent({
 
       const toolResults = await Promise.all(
         uniqueToolCalls.map(async (call) => {
+          assertNotAborted();
           const func = call.function;
           const executor = toolExecutors[func.name];
           if (!executor) {
@@ -599,8 +640,10 @@ export async function runAgent({
           }
           try {
             const output = await executor(parseToolArguments(func.arguments));
+            assertNotAborted();
             return { role: 'tool', tool_call_id: call.id, content: JSON.stringify(output) };
           } catch (err) {
+            if (err?.aborted || err?.name === 'AbortError') throw err;
             console.error(`Error executing tool "${func.name}":`, err);
             return { role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: err.message }) };
           }
