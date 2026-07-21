@@ -332,10 +332,20 @@ export async function ensureMetricPagesIndexed(company, year) {
   let needsPersist = false;
 
   const hasIndexedPages = Object.keys(pages).length > 0;
+  const onVercel = Boolean(process.env.VERCEL);
+  // Chat on Vercel must stay under serverless time limits. PDF download + pdf.js
+  // re-indexing (especially female_employee_share ranking for top-N companies)
+  // routinely exceeds Hobby/Pro defaults and surfaces as HTTP 500 with no SSE.
+  const allowPdfWorkOnVercel = process.env.VERCEL_INDEX_PDFS_ON_CHAT === 'true';
 
   // Already have page numbers from a prior index (e.g. local preprocess / committed DB).
   // On Vercel, NSE PDF downloads often fail — never wipe good pages just because a refresh failed.
   if (hasIndexedPages) {
+    // Skip share-metric PDF refresh on Vercel — existing pages are good enough for citations.
+    if (onVercel && !allowPdfWorkOnVercel) {
+      return rowForCitations({ ...row, metric_pages_json: JSON.stringify(pages) }, pages, false);
+    }
+
     // Optional best-effort share-metric refresh; ignore download failures.
     try {
       for (const metric of SHARE_METRICS_TO_REFRESH) {
@@ -368,6 +378,11 @@ export async function ensureMetricPagesIndexed(company, year) {
   }
 
   // First-time full index when nothing is stored yet.
+  // On Vercel during chat, skip remote PDF fetch/parse — return row without page citations.
+  if (onVercel && !allowPdfWorkOnVercel) {
+    return rowForCitations(row, pages, false);
+  }
+
   const { pages: indexed, unavailable } = await findMetricPagesResult(row.pdf_url, metricValues, row);
   if (unavailable) {
     // Do not persist unavailable permanently on ephemeral hosts — just skip citations this request.

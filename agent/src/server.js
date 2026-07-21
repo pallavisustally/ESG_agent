@@ -358,7 +358,9 @@ app.post('/api/chat', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-  res.flushHeaders();
+  if (typeof res.flushHeaders === 'function') {
+    res.flushHeaders();
+  }
 
   const abortController = new AbortController();
   const onClientClose = () => {
@@ -486,5 +488,11 @@ if (!process.env.VERCEL) {
     }
   });
 }
+
+// Vercel serverless: allow longer agent runs (female-share rankings + LLM).
+// Hobby max is typically 60s with Fluid; Pro can go higher — clamp via plan limits.
+export const config = {
+  maxDuration: 60,
+};
 
 export default app;

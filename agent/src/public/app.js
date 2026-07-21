@@ -1643,7 +1643,20 @@ document.addEventListener('DOMContentLoaded', () => {
       });
 
       if (!response.ok) {
-        throw new Error(`Server returned HTTP ${response.status}`);
+        let detail = '';
+        try {
+          const errBody = await response.text();
+          const parsed = JSON.parse(errBody);
+          detail = parsed.message || parsed.error || '';
+        } catch {
+          // ignore non-JSON error bodies (e.g. HTML timeout pages)
+        }
+        const hint = response.status === 504 || /timeout/i.test(detail)
+          ? ' The request timed out on the server (common on Vercel for ranking + chart questions).'
+          : detail
+            ? ` ${detail}`
+            : '';
+        throw new Error(`Server returned HTTP ${response.status}.${hint}`);
       }
 
       const reader = response.body.getReader();
