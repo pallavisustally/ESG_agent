@@ -26,6 +26,8 @@ export {
 export {
   createEngineResponse,
   mergeEngineResponses,
+  mergeEngineMemoryUpdates,
+  hasExplicitCompanyMemory,
 } from './engine-response.js';
 
 export { toolPlanFromExecutionPlan } from './tool-plan-from-execution.js';

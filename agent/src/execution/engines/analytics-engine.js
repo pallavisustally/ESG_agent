@@ -85,6 +85,8 @@ export async function runAnalyticsEngine(ctx = {}) {
         data: sqlResult.data || sqlResult,
         assumptions: sqlResult.assumptions || [],
         confidence: executionPlan.confidence || 0.85,
+        // Forward SQL memory patch unchanged — orchestrator persists it.
+        memoryUpdate: sqlResult.memoryUpdate || null,
         // Visualization is already embedded in sqlResult.text via Visualization Engine
         visualization: sqlResult.chartBlock
           ? { chartBlock: sqlResult.chartBlock }

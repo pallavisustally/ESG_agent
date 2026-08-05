@@ -1,19 +1,21 @@
 /**
- * Explicit metric resolution for follow-up planning.
+ * Metric resolution façade — delegates to the Metric Normalization Engine.
  *
- * Three stages (never skip stage 2):
- * 1. Direct schema lookup        → FOUND
- * 2. Derived metric lookup       → DERIVED
- * 3. Unavailable                 → UNSUPPORTED
+ * Legacy states (planner-compatible):
+ *   FOUND | DERIVED | UNSUPPORTED | NONE
  *
- * NONE = user did not mention any metric (safe to reuse memory).
+ * Engine states (rich):
+ *   FOUND | MEDIUM_CONFIDENCE | UNSUPPORTED | NO_MATCH
+ *
+ * MEDIUM_CONFIDENCE maps to FOUND/DERIVED (executable) in Phase 1.
  */
 
 import { hasUnsupportedMetricQualifier } from '../sql-sanitize.js';
-import { resolveMetricAliases } from '../metric-aliases.js';
-import { extractMetrics } from './classify-intent.js';
 import { refersToPriorCompanies } from './conversation-context.js';
-import { matchDerivedMetric } from './derived-metrics.js';
+import {
+  ENGINE_STATE,
+  runMetricNormalizationEngine,
+} from './metric-normalization-engine.js';
 
 export const METRIC_RESOLUTION = Object.freeze({
   FOUND: 'FOUND',
@@ -44,7 +46,7 @@ export function looksLikeMetricQuestion(text = '') {
   }
   return (
     /\b(how many|number of|how much|count of)\b/i.test(t)
-    || /\b(emissions?|intensity|footprint|headcount|share|percentage|ltifr|consumption)\b/i.test(t)
+    || /\b(emissions?|intensity|footprint|headcount|share|percentage|ltifr|consumption|strength|count)\b/i.test(t)
     || /\b(scope\s*\d)\b/i.test(t)
     || /\b(employee|workers?|workforce|board|male|men|female|women)\b/i.test(t)
   );
@@ -52,7 +54,7 @@ export function looksLikeMetricQuestion(text = '') {
 
 /**
  * Deterministic unsupported-metric request detector (current message only).
- * Call only after direct + derived lookup have already failed.
+ * Prefer engine result; kept for callers/tests that invoke this directly.
  */
 export function isUnsupportedMetricRequest(userMessage = '') {
   const text = String(userMessage || '');
@@ -60,9 +62,16 @@ export function isUnsupportedMetricRequest(userMessage = '') {
   if (hasUnsupportedMetricQualifier(text)) return true;
   if (UNSUPPORTED_PHRASE_RE.test(text)) return true;
 
-  // Anaphoric metric ask with no schema/derived match.
   if (refersToPriorCompanies(text) && looksLikeMetricQuestion(text)) {
     if (/\b(same metric|that metric|the same|this metric|the share|that share|the count|same ones?)\b/i.test(text)) {
+      return false;
+    }
+    // If the engine can resolve it, it is not unsupported.
+    const engine = runMetricNormalizationEngine(text);
+    if (
+      engine.engineState === ENGINE_STATE.FOUND
+      || engine.engineState === ENGINE_STATE.MEDIUM_CONFIDENCE
+    ) {
       return false;
     }
     if (/\b(disabled|pwd|plastic|ocean|employee|worker|emission|footprint|intensity|scope|women|female|male|men|board|waste|water|energy|carbon|ghg)\b/i.test(text)) {
@@ -72,31 +81,9 @@ export function isUnsupportedMetricRequest(userMessage = '') {
   return false;
 }
 
-function plannerMetricFromAliases(userMessage) {
-  const aliases = resolveMetricAliases(userMessage);
-  if (!aliases.columns?.length) return null;
-  if (
-    aliases.columns.includes('scope1_emissions')
-    && aliases.columns.includes('scope2_emissions')
-    && aliases.columns.includes('scope3_emissions')
-  ) {
-    return 'total_emissions';
-  }
-  return aliases.columns[0];
-}
-
-function hasUnavailableQualifier(userMessage = '') {
-  return hasUnsupportedMetricQualifier(userMessage) || UNSUPPORTED_PHRASE_RE.test(userMessage);
-}
-
 /**
  * Resolve metric state from the current user message.
  * Does not consult conversation memory.
- *
- * Stages:
- * 1. Direct schema lookup
- * 2. Derived metric lookup
- * 3. Unavailable
  *
  * @param {string} userMessage
  * @param {{ metrics?: string[], metric?: string|null }} [hints]
@@ -105,78 +92,48 @@ function hasUnavailableQualifier(userMessage = '') {
  *   metric: string|null,
  *   metrics: string[],
  *   derived?: object|null,
- *   stage: 'direct'|'derived'|'unavailable'|'none'
+ *   stage: string,
+ *   confidence?: number,
+ *   engineState?: string,
+ *   features?: object,
  * }}
  */
 export function resolveMetricState(userMessage = '', hints = {}) {
-  const fromHints = [
-    ...(Array.isArray(hints.metrics) ? hints.metrics : []),
-    ...(hints.metric ? [hints.metric] : []),
-  ].filter(Boolean);
+  const engine = runMetricNormalizationEngine(userMessage, hints);
 
-  const fromText = extractMetrics(userMessage);
-  let metrics = fromHints.length ? [...new Set(fromHints)] : fromText;
-  let metric = metrics[0] || null;
-
-  // ── Stage 1: direct schema lookup ──────────────────────────────────────
-  if (!metric) {
-    const aliased = plannerMetricFromAliases(userMessage);
-    if (aliased) {
-      metric = aliased;
-      metrics = [aliased];
-    }
-  }
-
-  if (metric) {
-    // Qualifier slices (disabled/PWD/…) are not the base schema metric.
-    if (hasUnavailableQualifier(userMessage)) {
-      return {
-        state: METRIC_RESOLUTION.UNSUPPORTED,
-        metric: null,
-        metrics: [],
-        derived: null,
-        stage: 'unavailable',
-      };
-    }
-    return {
-      state: METRIC_RESOLUTION.FOUND,
-      metric,
-      metrics: metrics.length ? metrics : [metric],
-      derived: null,
-      stage: 'direct',
-    };
-  }
-
-  // ── Stage 2: derived metric lookup (must not be skipped) ───────────────
-  const derived = matchDerivedMetric(userMessage);
-  if (derived) {
-    if (hasUnavailableQualifier(userMessage)) {
-      // e.g. "disabled male employees" — not a supported derived slice.
-      return {
-        state: METRIC_RESOLUTION.UNSUPPORTED,
-        metric: null,
-        metrics: [],
-        derived: null,
-        stage: 'unavailable',
-      };
-    }
-    return {
-      state: METRIC_RESOLUTION.DERIVED,
-      metric: derived.id,
-      metrics: [derived.id],
-      derived,
-      stage: 'derived',
-    };
-  }
-
-  // ── Stage 3: unavailable ───────────────────────────────────────────────
-  if (isUnsupportedMetricRequest(userMessage)) {
+  if (engine.engineState === ENGINE_STATE.UNSUPPORTED) {
     return {
       state: METRIC_RESOLUTION.UNSUPPORTED,
       metric: null,
       metrics: [],
       derived: null,
       stage: 'unavailable',
+      confidence: engine.confidence,
+      engineState: engine.engineState,
+      features: engine.features,
+      candidates: engine.candidates,
+    };
+  }
+
+  if (
+    engine.engineState === ENGINE_STATE.FOUND
+    || engine.engineState === ENGINE_STATE.MEDIUM_CONFIDENCE
+  ) {
+    const isDerived = engine.kind === 'derived' || Boolean(engine.derived);
+    return {
+      state: isDerived ? METRIC_RESOLUTION.DERIVED : METRIC_RESOLUTION.FOUND,
+      metric: engine.metric,
+      metrics: engine.metrics?.length ? engine.metrics : [engine.metric],
+      derived: engine.derived || null,
+      // Keep legacy stage labels for existing tests/callers.
+      stage: isDerived ? 'derived' : 'direct',
+      confidence: engine.confidence,
+      engineState: engine.engineState,
+      features: engine.features,
+      candidates: engine.candidates,
+      metricConfidence: engine.engineState === ENGINE_STATE.MEDIUM_CONFIDENCE
+        ? 'medium'
+        : 'high',
     };
   }
 
@@ -186,6 +143,10 @@ export function resolveMetricState(userMessage = '', hints = {}) {
     metrics: [],
     derived: null,
     stage: 'none',
+    confidence: engine.confidence || 0,
+    engineState: ENGINE_STATE.NO_MATCH,
+    features: engine.features,
+    candidates: engine.candidates,
   };
 }
 

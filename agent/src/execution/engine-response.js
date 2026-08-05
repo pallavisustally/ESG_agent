@@ -1,6 +1,10 @@
 /**
  * Standard engine response — every engine returns this shape.
  * Response Composer is the only module that turns these into final chat text.
+ *
+ * Optional `memoryUpdate` is a structured conversation-memory patch (same shape
+ * as sql-agent memoryUpdate). The Execution Orchestrator merges these patches
+ * and persists them via saveTurnMemory — engines never write memory themselves.
  */
 
 /**
@@ -17,6 +21,7 @@
  * @property {number} [confidence]
  * @property {object|null} [data]
  * @property {string} [dataText] - grounding text for downstream engines
+ * @property {object|null} [memoryUpdate] - structured conversation memory patch
  * @property {string} [error]
  */
 
@@ -38,6 +43,7 @@ export function createEngineResponse(input = {}) {
     confidence: clamp01(input.confidence),
     data: input.data ?? null,
     dataText: input.dataText ? String(input.dataText) : (input.ok ? String(input.text || '') : ''),
+    memoryUpdate: normalizeMemoryUpdate(input.memoryUpdate),
     error: input.error ? String(input.error) : null,
   };
 }
@@ -86,7 +92,51 @@ export function mergeEngineResponses(results = []) {
     dataset,
     confidence: n ? confidence / n : 0,
     ok: usable.some((r) => r.ok),
+    memoryUpdate: mergeEngineMemoryUpdates(usable),
   };
+}
+
+/**
+ * Merge structured memoryUpdate patches from successful engines.
+ * Later engines override scalar fields; non-empty arrays replace earlier ones;
+ * `filters` objects are shallow-merged.
+ *
+ * @param {EngineResponse[]} results
+ * @returns {object}
+ */
+export function mergeEngineMemoryUpdates(results = []) {
+  const merged = {};
+  for (const r of results || []) {
+    if (!r?.ok || !r.memoryUpdate || typeof r.memoryUpdate !== 'object') continue;
+    const u = r.memoryUpdate;
+    for (const [k, v] of Object.entries(u)) {
+      if (v === undefined) continue;
+      if (k === 'filters' && v && typeof v === 'object' && !Array.isArray(v)) {
+        merged.filters = { ...(merged.filters || {}), ...v };
+        continue;
+      }
+      if (Array.isArray(v)) {
+        if (v.length > 0 || merged[k] == null) merged[k] = [...v];
+        continue;
+      }
+      merged[k] = v;
+    }
+  }
+  return merged;
+}
+
+/** True when a patch explicitly supplies company-list fields from an engine. */
+export function hasExplicitCompanyMemory(patch = null) {
+  if (!patch || typeof patch !== 'object') return false;
+  return patch.lastCompanies != null
+    || patch.entities != null
+    || patch.lastPageItems != null
+    || patch.resolvedCompany != null;
+}
+
+function normalizeMemoryUpdate(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return { ...value };
 }
 
 function clamp01(value) {

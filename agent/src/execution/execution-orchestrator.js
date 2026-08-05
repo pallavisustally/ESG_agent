@@ -10,7 +10,11 @@
  */
 
 import { EXECUTION_ENGINES } from './execution-plan.js';
-import { createEngineResponse, mergeEngineResponses } from './engine-response.js';
+import {
+  createEngineResponse,
+  mergeEngineResponses,
+  mergeEngineMemoryUpdates,
+} from './engine-response.js';
 import { toolPlanFromExecutionPlan } from './tool-plan-from-execution.js';
 import {
   runAnalyticsEngine,
@@ -37,6 +41,7 @@ import {
 import { ERROR_CODES } from '../errors/agent-errors.js';
 import { logPipelineStage } from '../observability/agent-logger.js';
 import { shouldOmitFromComposition } from '../ops/soft-fail.js';
+import { saveTurnMemory } from '../pipeline/pipeline-helpers.js';
 
 const DEFAULT_ENGINE_TIMEOUT_MS = Number(process.env.EXECUTION_ENGINE_TIMEOUT_MS || 45000);
 
@@ -69,6 +74,7 @@ const PARALLEL_SAFE = new Set([
  * @param {object|null} [ctx.toolPlan] - optional legacy plan override
  * @param {Function|null} [ctx.onProgress]
  * @param {number} [ctx.timeoutMs]
+ * @param {string|null} [ctx.memoryKey] - when set, orchestrator persists merged engine memoryUpdate
  */
 export async function executeExecutionPlan(ctx = {}) {
   const executionPlan = ctx.executionPlan;
@@ -311,6 +317,44 @@ export async function executeExecutionPlan(ctx = {}) {
     strippedByRepair: (applied.repairActions || []).includes('strip_chart_block'),
   };
 
+  // Structured memory from engines (e.g. SQL ranking lastCompanies) — never from answer text.
+  const memoryUpdate = mergeEngineMemoryUpdates(usable);
+  let memory = ctx.memory || null;
+  if (ctx.memoryKey) {
+    if (Object.keys(memoryUpdate).length) {
+      memory = saveTurnMemory(ctx.memoryKey, {
+        classification: ctx.classification,
+        plan: toolPlan,
+        route: {
+          mode: 'execution_planner',
+          tools: executionPlan.requiredEngines,
+          skipRag: !executionPlan.needsReport && !executionPlan.needsPdf,
+        },
+        // Engine patch is authoritative for companies — do not re-derive from data rows.
+        data: null,
+        patch: {
+          ...memoryUpdate,
+          pendingRequest: null,
+        },
+        assumptions,
+      });
+    } else {
+      // No engine memory patch: refresh intent/metric/year without wiping prior companies.
+      memory = saveTurnMemory(ctx.memoryKey, {
+        classification: ctx.classification,
+        plan: toolPlan,
+        route: {
+          mode: 'execution_planner',
+          tools: executionPlan.requiredEngines,
+          skipRag: !executionPlan.needsReport && !executionPlan.needsPdf,
+        },
+        data: null,
+        patch: { pendingRequest: null },
+        assumptions,
+      });
+    }
+  }
+
   logPipelineStage('execution_orchestrator', {
     requestId: shared.requestId,
     intent: ctx.classification?.intent,
@@ -320,6 +364,7 @@ export async function executeExecutionPlan(ctx = {}) {
     tool: 'EXECUTION_PLANNER',
     latencyMs: executeMs + composeMs + validateMs,
     errorCode: errorPayload?.code || null,
+    memoryCompanies: memory?.lastCompanies?.length || 0,
   });
 
   return {
@@ -333,6 +378,8 @@ export async function executeExecutionPlan(ctx = {}) {
     engineResults: results,
     engineTrace,
     merged,
+    memoryUpdate,
+    memory,
     validation,
     responseValidation: validation,
     repairActions: applied.repairActions || [],

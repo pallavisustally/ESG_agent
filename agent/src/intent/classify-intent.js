@@ -8,6 +8,7 @@ import {
   resolveMetricState,
   shouldReuseMemoryMetric,
 } from './metric-resolution.js';
+import { extractMetricsFromEngine } from './metric-normalization-engine.js';
 import {
   refersToPriorCompanies,
   validatePriorCompanyReference,
@@ -126,27 +127,11 @@ function extractSector(text) {
 }
 
 /**
- * Metric resolution: longest / most specific regex match wins.
- * Prevents "carbon emissions intensity" collapsing to total_emissions.
+ * Metric ids from the Metric Normalization Engine (features + registry).
+ * METRIC_HINTS retained below for reference / legacy tooling only.
  */
 export function extractMetrics(text) {
-  const raw = String(text || '');
-  const matches = [];
-  for (const hint of METRIC_HINTS) {
-    const m = raw.match(hint.re);
-    if (!m) continue;
-    matches.push({
-      metric: hint.metric,
-      length: m[0].length,
-      index: m.index ?? 0,
-    });
-  }
-  matches.sort((a, b) => b.length - a.length || a.index - b.index);
-  const found = [];
-  for (const m of matches) {
-    if (!found.includes(m.metric)) found.push(m.metric);
-  }
-  return found;
+  return extractMetricsFromEngine(text);
 }
 
 function extractMetric(text) {

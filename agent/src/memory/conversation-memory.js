@@ -151,17 +151,25 @@ export function buildStructuredMemoryPatch({
   patch = {},
   assumptions = [],
 } = {}) {
-  const fromRows = Array.isArray(data?.rows)
+  // When an engine supplies an explicit company memory patch, that list is
+  // authoritative — do not pad/replace from classification.entities or rows.
+  const engineCompanies = patch.lastCompanies != null
+    || patch.entities != null
+    || patch.lastPageItems != null
+    || patch.resolvedCompany != null;
+
+  const fromRows = (!engineCompanies && Array.isArray(data?.rows))
     ? data.rows.map((r) => r.company).filter(Boolean)
     : [];
   const companies = uniq([
     ...(patch.lastCompanies || []),
     ...(patch.entities || []),
     ...(patch.lastPageItems || []),
-    ...(data?.companies || []),
+    ...(engineCompanies ? [] : (data?.companies || [])),
     ...fromRows,
-    ...(classification?.entities || []),
-    data?.resolvedCompany ? [data.resolvedCompany] : [],
+    ...(engineCompanies ? [] : (classification?.entities || [])),
+    ...(!engineCompanies && data?.resolvedCompany ? [data.resolvedCompany] : []),
+    ...(engineCompanies && patch.resolvedCompany ? [patch.resolvedCompany] : []),
   ]).slice(0, 10);
 
   const metricResolution = classification?.metricResolution
@@ -198,10 +206,9 @@ export function buildStructuredMemoryPatch({
     }
     : (patch.comparisonContext !== undefined ? patch.comparisonContext : undefined);
 
-  return {
+  const out = {
     lastIntent: classification?.intent || patch.lastIntent || null,
     canonicalIntent: classification?.canonicalIntent || patch.canonicalIntent || null,
-    lastCompanies: companies,
     lastMetric: metric,
     lastYear: year != null ? Number(year) : null,
     lastTool: null,
@@ -209,19 +216,31 @@ export function buildStructuredMemoryPatch({
     lastResultSummary: null,
     lastAssumptions: assumptions?.length ? [...assumptions] : (classification?.assumptions || []),
     lastPlan: null,
-    entities: companies,
     filters: {
       ...(metric ? { metric } : {}),
       ...(year != null ? { years: [Number(year)] } : {}),
       ...(classification?.filters?.sector ? { sector: classification.filters.sector } : {}),
       ...(classification?.filters?.order ? { order: classification.filters.order } : {}),
       ...(classification?.filters?.limit != null ? { limit: classification.filters.limit } : {}),
+      ...(patch.filters || {}),
     },
-    resolvedCompany: data?.resolvedCompany || patch.resolvedCompany || companies[0] || null,
+    resolvedCompany: engineCompanies
+      ? (patch.resolvedCompany || companies[0] || null)
+      : (data?.resolvedCompany || patch.resolvedCompany || companies[0] || null),
     ...(comparisonContext !== undefined ? { comparisonContext } : {}),
     // Clear pending unless caller explicitly preserves/sets it.
     pendingRequest: patch.pendingRequest !== undefined ? patch.pendingRequest : null,
   };
+
+  // Only write company lists when an engine (or non-empty derived list) supplies them.
+  // Omitting empty lists preserves prior lastCompanies across knowledge/guidance turns.
+  if (engineCompanies || companies.length) {
+    out.lastCompanies = companies;
+    out.entities = companies;
+    if (patch.lastPageItems != null) out.lastPageItems = [...patch.lastPageItems];
+  }
+
+  return out;
 }
 
 /**

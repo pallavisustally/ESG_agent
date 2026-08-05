@@ -10,12 +10,18 @@ import {
   executeExecutionPlan,
   createEngineResponse,
   mergeEngineResponses,
+  mergeEngineMemoryUpdates,
   toolPlanFromExecutionPlan,
   runKnowledgeEngine,
   runComplianceEngine,
   runGuidanceEngine,
   runDocumentEngine,
 } from './index.js';
+import {
+  getMemory,
+  clearMemory,
+  updateMemory,
+} from '../memory/conversation-memory.js';
 
 describe('engine response contract', () => {
   it('creates and merges standard responses', () => {
@@ -36,6 +42,43 @@ describe('engine response contract', () => {
     assert.equal(merged.ok, true);
     assert.equal(merged.citations.length, 1);
     assert.ok(merged.confidence > 0);
+  });
+
+  it('forwards and merges optional memoryUpdate patches', () => {
+    const analytics = createEngineResponse({
+      engine: 'analytics',
+      ok: true,
+      text: '### Top 2',
+      memoryUpdate: {
+        lastIntent: 'TOP_METRIC',
+        lastCompanies: ['A Co', 'B Co'],
+        lastMetric: 'female_employee_share',
+        lastYear: 2025,
+        lastPageItems: ['A Co', 'B Co'],
+      },
+    });
+    const rec = createEngineResponse({
+      engine: 'recommendation',
+      ok: true,
+      text: '### Tips',
+      memoryUpdate: {
+        lastTool: 'RECOMMENDATION',
+      },
+    });
+    const failed = createEngineResponse({
+      engine: 'report',
+      ok: false,
+      text: '',
+      memoryUpdate: {
+        lastCompanies: ['Should Not Win'],
+      },
+    });
+    assert.deepEqual(analytics.memoryUpdate.lastCompanies, ['A Co', 'B Co']);
+    const merged = mergeEngineMemoryUpdates([analytics, rec, failed]);
+    assert.deepEqual(merged.lastCompanies, ['A Co', 'B Co']);
+    assert.equal(merged.lastMetric, 'female_employee_share');
+    assert.equal(merged.lastTool, 'RECOMMENDATION');
+    assert.ok(mergeEngineResponses([analytics, rec]).memoryUpdate.lastCompanies.length === 2);
   });
 });
 
@@ -174,5 +217,55 @@ describe('executeExecutionPlan orchestration', () => {
     });
     assert.equal(result.handled, true);
     assert.match(result.text, /company/i);
+  });
+
+  it('persists analytics ranking memoryUpdate via memoryKey', async () => {
+    const msg = 'Top 5 companies by female employee share in 2025';
+    const classification = classifyIntent(msg);
+    const { plan } = planExecution({ userMessage: msg, classification });
+    const memoryKey = `test:engine-memory:${Date.now()}`;
+    clearMemory(memoryKey);
+    try {
+      const result = await executeExecutionPlan({
+        executionPlan: plan,
+        userMessage: msg,
+        classification,
+        memoryKey,
+      });
+      assert.equal(result.handled, true);
+      assert.ok(result.memoryUpdate?.lastCompanies?.length >= 1);
+      assert.equal(result.memory?.lastCompanies?.length, result.memoryUpdate.lastCompanies.length);
+      const stored = getMemory(memoryKey);
+      assert.deepEqual(stored.lastCompanies, result.memoryUpdate.lastCompanies);
+      assert.equal(stored.lastMetric, 'female_employee_share');
+      assert.equal(stored.lastYear, 2025);
+    } finally {
+      clearMemory(memoryKey);
+    }
+  });
+
+  it('does not wipe prior lastCompanies when engines omit memoryUpdate', async () => {
+    const memoryKey = `test:engine-memory-preserve:${Date.now()}`;
+    clearMemory(memoryKey);
+    updateMemory(memoryKey, {
+      lastCompanies: ['Infosys Limited', 'TCS'],
+      lastMetric: 'scope1_emissions',
+      lastYear: 2025,
+    });
+    try {
+      const msg = 'What is Scope 1?';
+      const classification = classifyIntent(msg);
+      const { plan } = planExecution({ userMessage: msg, classification });
+      await executeExecutionPlan({
+        executionPlan: plan,
+        userMessage: msg,
+        classification,
+        memoryKey,
+      });
+      const stored = getMemory(memoryKey);
+      assert.deepEqual(stored.lastCompanies, ['Infosys Limited', 'TCS']);
+    } finally {
+      clearMemory(memoryKey);
+    }
   });
 });

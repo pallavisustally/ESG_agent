@@ -318,22 +318,15 @@ export async function executeRoutedBranches(state) {
         userMessage,
         classification,
         memory,
+        memoryKey: key,
         toolPlan: state.plan || toolPlanFromExecutionPlan(executionPlan, classification),
         onProgress,
         requestId: state.trace?.requestId || null,
         trace: state.trace || null,
       });
       if (orchestrated.handled && orchestrated.text) {
-        memory = saveTurnMemory(key, {
-          classification,
-          plan: orchestrated.toolPlan || state.plan,
-          route: {
-            mode: 'execution_planner',
-            tools: executionPlan.requiredEngines,
-            skipRag: !executionPlan.needsReport && !executionPlan.needsPdf,
-          },
-          assumptions: classification.assumptions,
-        });
+        // Orchestrator is the single writer of conversation memory for this path.
+        memory = orchestrated.memory || memory;
         logPipelineStage('execution_orchestrator', {
           intent: classification.intent,
           strategy: executionPlan.executionStrategy,
@@ -343,6 +336,7 @@ export async function executeRoutedBranches(state) {
           latencyMs: elapsed?.(),
           errorCode: orchestrated.error?.code || null,
           requestId: state.trace?.requestId || null,
+          memoryCompanies: memory?.lastCompanies?.length || 0,
         });
         return {
           handled: true,
@@ -365,6 +359,7 @@ export async function executeRoutedBranches(state) {
           executionPlan,
           engineResults: orchestrated.engineResults,
           engineTrace: orchestrated.engineTrace || null,
+          memoryUpdate: orchestrated.memoryUpdate || null,
           validation: orchestrated.validation || orchestrated.responseValidation || null,
           responseValidation: orchestrated.responseValidation || orchestrated.validation || null,
           repairActions: orchestrated.repairActions || [],

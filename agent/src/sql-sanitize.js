@@ -103,7 +103,12 @@ const SQL_NOISE_TOKENS = new Set([
  */
 export function hasUnsupportedMetricQualifier(userMessage = '') {
   const q = String(userMessage || '').toLowerCase();
-  return /\bdisabled\b|\bdifferently[-\s]?abled\b|\bpwd\b|\bhandicap|\bimpair|\bpermanent\b|\btemporary\b|\bcontract(ual)?\b|\bmigrant\b|\bcaste\b|\btribal\b|\bsc\/?st\b|\bobc\b|\bage\s*group\b|\bsenior\s*citizen\b|\bsupplier\b|\bvalue\s*chain\b|\bcsr\b|\btraining\s*hours?\b|\bminimum\s*wage\b|\bparental\s*leave\b|\bsexual\s*harassment\b|\bhuman\s*rights\b|\bscope\s*4\b|\bscope\s*3\.?\d/.test(q);
+  // Note: "value chain" is NOT here — Metric Normalization maps it to Scope 3.
+  // Supplier-only / social slices remain unsupported when not paired with emissions.
+  if (/\bvalue\s*chain\b/.test(q) && /\b(emission|carbon|ghg|scope)\b/.test(q)) {
+    return false;
+  }
+  return /\bdisabled\b|\bdifferently[-\s]?abled\b|\bpwd\b|\bhandicap|\bimpair|\bpermanent\b|\btemporary\b|\bcontract(ual)?\b|\bmigrant\b|\bcaste\b|\btribal\b|\bsc\/?st\b|\bobc\b|\bage\s*group\b|\bsenior\s*citizen\b|\bsupplier\b|\bcsr\b|\btraining\s*hours?\b|\bminimum\s*wage\b|\bparental\s*leave\b|\bsexual\s*harassment\b|\bhuman\s*rights\b|\bscope\s*4\b|\bscope\s*3\.?\d/.test(q);
 }
 
 /** Human-readable column list for tool errors / model retries. */

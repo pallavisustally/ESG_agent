@@ -8,33 +8,16 @@
 import fs from 'fs';
 import path from 'path';
 import { resolveFromProject } from './paths.js';
+import { normalizeMetricQueryText as normalizeFromEngine } from './intent/metric-normalize.js';
 
 /** @typedef {{ id: string, pattern: RegExp, columns: string[], guidance: string }} MetricAlias */
 
-/** Common user typos / near-misses before alias matching. */
-const QUERY_TYPO_FIXES = [
-  [/\bcarbom\b/gi, 'carbon'],
-  [/\bcarborn\b/gi, 'carbon'],
-  [/\bcarbonn\b/gi, 'carbon'],
-  [/\bgreenhose\b/gi, 'greenhouse'],
-  [/\bgreen\s*house\b/gi, 'greenhouse'],
-  // emisiions / emision / emisions / emissons / emisssions → emissions
-  [/\bemis+i*o+n+s?\b/gi, 'emissions'],
-  [/\bghgs\b/gi, 'ghg'],
-  [/\brenewables\b/gi, 'renewable'],
-  [/\bwatter\b/gi, 'water'],
-  [/\bwastee\b/gi, 'waste'],
-];
-
 /**
  * Normalize spelling noise so "carbon emisiions" still resolves.
+ * Delegates to the shared Metric Normalization Engine text normalizer.
  */
 export function normalizeMetricQueryText(text = '') {
-  let out = String(text || '');
-  for (const [pattern, replacement] of QUERY_TYPO_FIXES) {
-    out = out.replace(pattern, replacement);
-  }
-  return out;
+  return normalizeFromEngine(text);
 }
 
 /** @type {MetricAlias[]} */
