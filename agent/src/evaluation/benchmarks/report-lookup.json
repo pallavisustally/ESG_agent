@@ -1,0 +1,45 @@
+[
+  {
+    "id": "report-lookup-infosys-brsr",
+    "category": "report-lookup",
+    "tier": "smoke",
+    "question": "Find the BRSR report for Infosys 2024",
+    "expected": {
+      "intent": "REPORT_LOOKUP",
+      "entities": ["Infosys"],
+      "year": 2024,
+      "executionStrategy": "report",
+      "engines": ["report"],
+      "citations": { "required": true }
+    },
+    "score": { "routing": true, "entity": true, "metric": false, "year": true, "citation": true }
+  },
+  {
+    "id": "report-lookup-company-summary",
+    "category": "report-lookup",
+    "tier": "smoke",
+    "question": "Summarize Tata Steel sustainability report for 2024",
+    "expected": {
+      "entities": ["Tata Steel"],
+      "year": 2024,
+      "engines": ["report"]
+    },
+    "score": { "routing": true, "entity": true, "metric": false, "year": true, "citation": false }
+  },
+  {
+    "id": "report-lookup-full",
+    "category": "report-lookup",
+    "tier": "full",
+    "question": "Summarize the Infosys BRSR report for 2024 with sources",
+    "expected": {
+      "intent": "REPORT_LOOKUP",
+      "entities": ["Infosys"],
+      "year": 2024,
+      "executionStrategy": "report",
+      "engines": ["report"],
+      "citations": { "required": true },
+      "answerValidation": "PASS_OR_WARNING"
+    },
+    "score": { "routing": true, "entity": true, "metric": false, "year": true, "citation": true, "numeric": true }
+  }
+]

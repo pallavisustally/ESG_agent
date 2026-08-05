@@ -1,0 +1,60 @@
+[
+  {
+    "id": "rankings-top5-scope1-2024",
+    "category": "rankings",
+    "tier": "smoke",
+    "question": "Top 5 companies by Scope 1 emissions in 2024",
+    "expected": {
+      "intent": "TOP_METRIC",
+      "metric": "scope1_emissions",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"]
+    },
+    "score": { "routing": true, "entity": false, "metric": true, "year": true }
+  },
+  {
+    "id": "rankings-bottom5-renewable",
+    "category": "rankings",
+    "tier": "smoke",
+    "question": "Bottom 5 companies by renewable energy share in 2024",
+    "expected": {
+      "intent": "BOTTOM_METRIC",
+      "metric": "renewable_energy_share",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"]
+    },
+    "score": { "routing": true, "metric": true, "year": true, "entity": false }
+  },
+  {
+    "id": "rankings-top10-total-emissions",
+    "category": "rankings",
+    "tier": "smoke",
+    "question": "Which companies have the highest carbon emissions in 2024?",
+    "expected": {
+      "intent": "TOP_METRIC",
+      "metric": "total_emissions",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"]
+    },
+    "score": { "routing": true, "metric": true, "year": true, "entity": false }
+  },
+  {
+    "id": "rankings-top5-female-board",
+    "category": "rankings",
+    "tier": "full",
+    "question": "Top 5 companies by female board share in 2024 with a chart",
+    "expected": {
+      "intent": "TOP_METRIC",
+      "metric": "female_board_share",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"],
+      "chart": { "required": true, "chartType": "bar" },
+      "answerValidation": "PASS_OR_WARNING"
+    },
+    "score": { "routing": true, "metric": true, "year": true, "entity": false, "chart": true, "numeric": true }
+  }
+]

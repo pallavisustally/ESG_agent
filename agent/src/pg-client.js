@@ -21,13 +21,21 @@ export class PgDatabase {
     this.dialect = 'postgres';
   }
 
+  async _query(sql, params = []) {
+    const { withDbRetry } = await import('./db-health.js');
+    const { text, values } = toPgQuery(sql, params);
+    return withDbRetry(
+      async () => this.pool.query(text, values),
+      { label: 'pg-query', retries: parseInt(process.env.DB_RETRY_COUNT, 10) || 3 },
+    );
+  }
+
   async exec(sql) {
-    await this.pool.query(sql);
+    await this._query(sql, []);
   }
 
   async all(sql, params = []) {
-    const { text, values } = toPgQuery(sql, params);
-    const result = await this.pool.query(text, values);
+    const result = await this._query(sql, params);
     return result.rows;
   }
 
@@ -37,8 +45,7 @@ export class PgDatabase {
   }
 
   async run(sql, params = []) {
-    const { text, values } = toPgQuery(sql, params);
-    const result = await this.pool.query(text, values);
+    const result = await this._query(sql, params);
     return { changes: result.rowCount ?? 0 };
   }
 

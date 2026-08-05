@@ -1,0 +1,46 @@
+[
+  {
+    "id": "pdf-lookup-infosys-emissions-page",
+    "category": "pdf-lookup",
+    "tier": "smoke",
+    "question": "Find the Infosys BRSR PDF for 2024",
+    "expected": {
+      "intent": "REPORT_LOOKUP",
+      "entities": ["Infosys"],
+      "year": 2024,
+      "executionStrategy": "report",
+      "engines": ["report"],
+      "citations": { "required": true }
+    },
+    "score": { "routing": true, "entity": true, "metric": false, "year": true, "citation": true }
+  },
+  {
+    "id": "pdf-lookup-open-report",
+    "category": "pdf-lookup",
+    "tier": "smoke",
+    "question": "Open the Wipro BRSR PDF for 2024",
+    "expected": {
+      "entities": ["Wipro"],
+      "year": 2024,
+      "engines": ["report"],
+      "citations": { "required": true }
+    },
+    "score": { "routing": true, "entity": true, "metric": false, "year": true, "citation": true }
+  },
+  {
+    "id": "pdf-lookup-full-citation",
+    "category": "pdf-lookup",
+    "tier": "full",
+    "question": "Open the TCS BRSR PDF for 2024",
+    "expected": {
+      "intent": "REPORT_LOOKUP",
+      "entities": ["TCS"],
+      "year": 2024,
+      "executionStrategy": "report",
+      "engines": ["report"],
+      "citations": { "required": true },
+      "answerValidation": "PASS_OR_WARNING"
+    },
+    "score": { "routing": true, "entity": true, "metric": false, "year": true, "citation": true, "numeric": true }
+  }
+]

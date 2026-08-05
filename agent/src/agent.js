@@ -4,6 +4,8 @@ import { SYSTEM_PROMPT } from './system-prompt.js';
 import { callOllamaChat, getOllamaConfig } from './ollama-client.js';
 import { enrichSqlRows, enrichCompanyReport, upgradeReportCitations } from './report-sources.js';
 import { verifyAgentCitations } from './pdf-verifier.js';
+import { repairResponseMedia } from './answers/response-media.js';
+import { normalizeChartJson } from './visualization/index.js';
 import {
   sanitizeMetricOrderQuery,
   filterRankingRows,
@@ -13,7 +15,34 @@ import {
   findUnknownSqlColumns,
   listReportsColumns,
   hasUnsupportedMetricQualifier,
+  detectEmissionsDataIntent,
+  filterZeroEmissionRows,
+  buildCarbonEmissionsOverviewSql,
 } from './sql-sanitize.js';
+import {
+  resolveMetricAliases,
+  rewriteAliasedSqlColumns,
+  suggestColumnsForUnknown,
+  repairFalseUnavailableAnswer,
+  looksLikeFalseUnavailableRefusal,
+  logMetricAliasEvent,
+  maybeLogUnresolvedEsgPhrase,
+} from './metric-aliases.js';
+import { runBrsrPipeline } from './pipeline/run-pipeline.js';
+import { validateResponse } from './validation/response-validator.js';
+import { applyAnswerValidation } from './validation/answer-validator.js';
+import { userFacingErrorMessage } from './errors/agent-errors.js';
+import {
+  explainSqlFailure,
+  shouldBlockLlmFallback,
+  noFabricationSystemAddon,
+  STRUCTURED_SQL_INTENTS,
+} from './answers/sql-failure.js';
+import { logPipelineStage } from './observability/agent-logger.js';
+import {
+  isEmissionRankMetric,
+  filterNormalizeEmissionRankingRows,
+} from './sql-agent/emission-normalize.js';
 
 dotenv.config();
 
@@ -41,9 +70,9 @@ function friendlySqlStatus(query = '', phase = 'start') {
   if (phase === 'fallback') return 'Correcting the ranking to match your question…';
   if (phase === 'done') return 'Gathered the matching report data.';
 
-  if (/female_employee_share/.test(q)) return 'Comparing female employee share across companies…';
+  if (/female_employee_share|male_employee_share/.test(q)) return 'Comparing workforce gender share across companies…';
   if (/female_board_share/.test(q)) return 'Comparing board gender diversity…';
-  if (/female_employee_count|total_employee_count/.test(q)) return 'Looking up workforce diversity figures…';
+  if (/female_employee_count|male_employee_count|total_employee_count/.test(q)) return 'Looking up workforce diversity figures…';
   if (/scope_?1|scope_?2|scope_?3|emissions_intensity/.test(q)) return 'Looking up greenhouse gas emissions…';
   if (/renewable_energy|energy_consumption|energy_intensity/.test(q)) return 'Checking energy and renewable metrics…';
   if (/water_consumption|water_intensity/.test(q)) return 'Checking water consumption metrics…';
@@ -168,16 +197,86 @@ export async function runAgent({
   modelName = null,
   ollamaHost = null,
   onProgress = null,
-  signal = null
+  signal = null,
+  sessionId = null,
 }) {
   const config = getOllamaConfig({ modelName, ollamaHost });
   const url = config.host ? `${config.host}/api/chat` : null;
   const maxIterations = parseInt(process.env.AGENT_MAX_ITERATIONS, 10) || 5;
-  const maxHistory = parseInt(process.env.AGENT_MAX_HISTORY, 10) || 4;
+  const maxHistory = parseInt(process.env.AGENT_MAX_HISTORY, 10) || 8;
   let answerStreamingStarted = false;
   let streamedText = '';
   const seenSourceRows = [];
   const requestedYears = [...new Set([...String(userMessage).matchAll(/\b(20\d{2})\b/g)].map((m) => Number(m[1])))];
+
+  // Intent → Planner → Router → deterministic BRSR SQL (list/count/rank) before LLM tools.
+  let pipelineMeta = null;
+  try {
+    pipelineMeta = await runBrsrPipeline({
+      userMessage,
+      chatHistory,
+      sessionId,
+      onProgress,
+    });
+    if (pipelineMeta?.handled && pipelineMeta.text) {
+      // Same chart JSON lift as the LLM path — SQL agent emits nested { data: { labels, datasets } }.
+      const pipelineText = normalizeChartJson(repairResponseMedia(pipelineMeta.text));
+      return {
+        text: pipelineText,
+        citationVerification: null,
+        chatHistory: [
+          ...trimChatHistory(chatHistory, maxHistory).map((m) => ({
+            role: m.role,
+            content: m.text ?? m.content ?? '',
+          })),
+          { role: 'user', content: userMessage },
+          { role: 'assistant', content: pipelineText },
+        ],
+        pipeline: {
+          intent: pipelineMeta.classification?.intent,
+          mode: pipelineMeta.route?.mode,
+          strategy: pipelineMeta.plan?.strategy,
+          forbidLlmFallback: Boolean(pipelineMeta.forbidLlmFallback),
+        },
+      };
+    }
+
+    // Phase 11 safety net: structured SQL intents must never reach LLM fabrication.
+    const pipeIntent = pipelineMeta?.classification?.intent;
+    if (
+      pipelineMeta?.forbidLlmFallback
+      || (pipeIntent && STRUCTURED_SQL_INTENTS.has(pipeIntent) && shouldBlockLlmFallback(pipeIntent, { error: 'handoff_llm' }))
+    ) {
+      const failureText = pipelineMeta?.text || explainSqlFailure({
+        intent: pipeIntent,
+        error: pipelineMeta?.sqlError || 'structured_sql_unhandled',
+        metric: pipelineMeta?.classification?.metric || pipelineMeta?.plan?.metric,
+        companies: pipelineMeta?.classification?.entities,
+        year: pipelineMeta?.classification?.filters?.years?.[0],
+        sector: pipelineMeta?.classification?.filters?.sector,
+      });
+      return {
+        text: failureText,
+        citationVerification: null,
+        chatHistory: [
+          ...trimChatHistory(chatHistory, maxHistory).map((m) => ({
+            role: m.role,
+            content: m.text ?? m.content ?? '',
+          })),
+          { role: 'user', content: userMessage },
+          { role: 'assistant', content: failureText },
+        ],
+        pipeline: {
+          intent: pipeIntent,
+          mode: pipelineMeta?.route?.mode,
+          strategy: pipelineMeta?.plan?.strategy,
+          forbidLlmFallback: true,
+        },
+      };
+    }
+  } catch (pipeErr) {
+    console.warn('[Pipeline] Falling back to LLM tools:', userFacingErrorMessage(pipeErr));
+  }
 
   function assertNotAborted() {
     if (signal?.aborted) {
@@ -233,8 +332,17 @@ export async function runAgent({
       type: 'function',
       function: {
         name: 'list_companies',
-        description: 'List all companies currently available in the database.',
-        parameters: { type: 'object', properties: {} }
+        description:
+          'Overview of companies in the indexed BRSR database: total count, paginated names, sector counts, and CSV export path /api/companies?format=csv. Use for discovery. When the user wants ALL names, include total + page + export link — do not invent a tiny sample.',
+        parameters: {
+          type: 'object',
+          properties: {
+            page: { type: 'number', description: '1-based page (default 1)' },
+            page_size: { type: 'number', description: 'Page size (default 100, max 500)' },
+            sector: { type: 'string', description: 'Optional sector filter' },
+            wants_all: { type: 'boolean', description: 'True when user asked for every company name' },
+          },
+        },
       }
     },
     {
@@ -261,7 +369,7 @@ export async function runAgent({
           properties: {
             query: {
               type: 'string',
-              description: 'Read-only SQL SELECT on reports using only real schema columns (company, year, sector, industry, scope1/2/3_emissions, energy_consumption, renewable_energy_share, water_consumption, waste_generated, *_intensity, female_employee_count/share, female_board_count/share, safety_ltifr, total_revenue, …). Example pattern: SELECT company, year, <metric> FROM reports WHERE year = 2025 AND <metric> IS NOT NULL AND <metric> > 0 ORDER BY <metric> DESC LIMIT 5. Never invent columns; if the asked metric is not in the schema, do not query a substitute.'
+              description: 'Read-only SQL SELECT on reports using only real schema columns (company, year, sector, industry, scope1/2/3_emissions, energy_consumption, renewable_energy_share, water_consumption, waste_generated, *_intensity, female_employee_count/share, male_employee_count/share, female_board_count/share, safety_ltifr, total_revenue, …). Map synonyms: carbon/GHG emissions → scope1+scope2+scope3 (or SUM); carbon intensity → emissions_intensity; water use → water_consumption; women workforce % → female_employee_share; male workforce % → male_employee_share. Example: SELECT company, year, <metric> FROM reports WHERE year = 2025 AND <metric> IS NOT NULL AND <metric> > 0 ORDER BY <metric> DESC LIMIT 5. Never invent columns like carbon_emissions; if truly not in schema and no synonym mapping, do not substitute.'
             }
           },
           required: ['query']
@@ -304,24 +412,54 @@ export async function runAgent({
       return enriched || { error: `No report found in the database for company "${company}" and year ${year}. Use list_company_reports to see what is available.` };
     },
 
-    list_companies: async () => {
+    list_companies: async (args = {}) => {
       if (onProgress) {
         onProgress({ status: 'tool_start', tool: 'list_companies', message: 'Retrieving list of companies...' });
       }
-      
-      const companies = await getCompanyList();
-      
+
+      const { paginateArray } = await import('./pagination/pagination.js');
+      let companies = await getCompanyList();
+      const sector = args.sector ? String(args.sector).trim() : '';
+      if (sector) {
+        const db = await getDb();
+        const rows = await db.all(
+          `SELECT DISTINCT company FROM reports WHERE lower(COALESCE(sector,'')) = lower(?) ORDER BY company`,
+          [sector],
+        );
+        companies = rows.map((r) => r.company);
+      }
+      const db = await getDb();
+      const bySector = await db.all(
+        `SELECT COALESCE(NULLIF(TRIM(sector), ''), 'Unknown') AS sector,
+                COUNT(DISTINCT company) AS company_count
+         FROM reports
+         GROUP BY 1
+         ORDER BY company_count DESC, sector ASC`,
+      );
+
+      const pageSize = args.wants_all || args.wantsAll ? (args.page_size || args.pageSize || 100) : (args.page_size || args.pageSize || 50);
+      const paged = paginateArray(companies, { page: args.page || 1, pageSize });
+      const exportPath = sector
+        ? `/api/companies?format=csv&sector=${encodeURIComponent(sector)}`
+        : '/api/companies?format=csv';
+
       if (onProgress) {
         onProgress({ status: 'tool_end', tool: 'list_companies', message: `Found ${companies.length} companies.` });
       }
 
-      if (companies.length > 50) {
-        return {
-          error: `Too many companies (${companies.length}) to list at once. Do NOT request the full list, as it will exhaust your context. Instead, search for a company name using SQL: SELECT DISTINCT company FROM reports WHERE company LIKE '%Keyword%'`
-        };
-      }
-
-      return { companies };
+      return {
+        total: paged.total,
+        page: paged.page,
+        page_size: paged.pageSize,
+        companies: paged.items,
+        truncated: paged.hasNext,
+        has_next: paged.hasNext,
+        export_csv: exportPath,
+        by_sector: bySector,
+        hint:
+          'Include the total count and this page of names. If truncated or user asked for ALL names, mention pagination (say "next") and the export_csv link. ' +
+          'Do NOT ask the user for a keyword first. Do NOT invent a 3-name sample when total is large.',
+      };
     },
 
     list_company_reports: async (args) => {
@@ -378,15 +516,31 @@ export async function runAgent({
       }
       
       try {
-        const unknownCols = findUnknownSqlColumns(query);
+        // Rewrite slang/invented column names (carbon_emissions → scope1_emissions, etc.)
+        const aliasedQuery = rewriteAliasedSqlColumns(query, userMessage);
+        const unknownCols = findUnknownSqlColumns(aliasedQuery);
         if (unknownCols.length) {
+          const suggestion = suggestColumnsForUnknown(unknownCols, userMessage);
+          const metricHint = resolveMetricAliases(userMessage);
+          if (suggestion) {
+            logMetricAliasEvent({
+              type: 'unknown_sql_column_suggested',
+              userMessage,
+              detail: { unknownCols, suggestion },
+            });
+          }
+          const synonymNote = metricHint.columns.length
+            ? ` This question maps to: ${metricHint.columns.join(', ')}. Re-run SQL with those columns — do NOT say the metric is unavailable.`
+            : '';
           return {
             error:
               `Unknown column(s) in SQL: ${unknownCols.join(', ')}. `
+              + (suggestion ? `Did you mean: ${suggestion}. ` : '')
               + `Available reports columns: ${listReportsColumns()}. `
-              + 'If the user asked for a metric not in this list, do NOT substitute a related column — '
-              + 'reply in 1–2 short sentences that the metric is not available (no Executive Summary headings).',
+              + (synonymNote
+                || 'If the user asked for a metric not in this list and no synonym mapping applies, do NOT substitute a related column — reply in 1–2 short sentences that the metric is not available (no Executive Summary headings).'),
             unavailable_columns: unknownCols,
+            suggested_columns: suggestion || null,
             available_columns: listReportsColumns().split(', '),
           };
         }
@@ -394,7 +548,7 @@ export async function runAgent({
         // Block silent substitutes: e.g. "disabled female workers" → female_employee_count ranking.
         if (
           hasUnsupportedMetricQualifier(userMessage)
-          && /\bfemale_employee_(count|share)\b/i.test(query)
+          && /\bfemale_employee_(count|share)\b/i.test(aliasedQuery)
           && /\b(disabled|differently|pwd|handicap|impair|permanent|temporary|contract|migrant|caste|tribal|supplier|csr|training)\b/i.test(userMessage)
         ) {
           return {
@@ -408,7 +562,7 @@ export async function runAgent({
         }
 
         const db = await getDb();
-        const fuzzy = ensureCompanyYearInSelect(relaxCompanyExactMatch(query));
+        const fuzzy = ensureCompanyYearInSelect(relaxCompanyExactMatch(aliasedQuery));
         let { sql: rewritten, orderColumn, orderDir, limit: rankingLimit } = sanitizeMetricOrderQuery(fuzzy, {
           postgres: isPostgres() || db.dialect === 'postgres',
           userMessage,
@@ -436,6 +590,53 @@ export async function runAgent({
 
         if (orderColumn) {
           normalizedRows = filterRankingRows(normalizedRows, orderColumn, orderDir);
+          if (rankingLimit != null) {
+            normalizedRows = normalizedRows.slice(0, rankingLimit);
+          }
+        }
+
+        // Carbon/GHG lists must not return all-null/zero scope rows displayed as "0 tCO2e".
+        if (detectEmissionsDataIntent(userMessage)) {
+          const before = normalizedRows.length;
+          normalizedRows = filterZeroEmissionRows(normalizedRows);
+          const year = yearHint ?? (requestedYears.length === 1 ? requestedYears[0] : null);
+          const mostlyZeros = before > 0 && normalizedRows.length < Math.min(3, before);
+          if ((mostlyZeros || !normalizedRows.length) && year) {
+            const fallbackSql = buildCarbonEmissionsOverviewSql(year, rankingLimit || 10);
+            if (fallbackSql) {
+              if (onProgress) {
+                onProgress({
+                  status: 'tool_start',
+                  tool: 'execute_sql_query',
+                  message: friendlySqlStatus('', 'fallback'),
+                });
+              }
+              rows = await db.all(fallbackSql);
+              orderColumn = 'total_emissions';
+              orderDir = 'DESC';
+              rankingLimit = rankingLimit || 10;
+              normalizedRows = filterZeroEmissionRows(rows);
+            }
+          }
+
+          // Unit normalize + drop parse/light-sector outliers (same guards as SQL agent rankings).
+          const emissionMetric = isEmissionRankMetric(orderColumn)
+            ? orderColumn
+            : (orderColumn === 'total_ghg_emissions' || detectEmissionsDataIntent(userMessage)
+              ? 'total_emissions'
+              : null);
+          if (emissionMetric && normalizedRows.some((r) => 'scope1_emissions' in (r || {}) || 'scope2_emissions' in (r || {}))) {
+            const { rows: cleaned } = filterNormalizeEmissionRankingRows(normalizedRows, emissionMetric, {
+              order: orderDir || 'DESC',
+            });
+            normalizedRows = cleaned.map((r) => ({
+              ...r,
+              total_ghg_emissions: r.metric_value,
+              total_emissions: r.metric_value,
+            }));
+            orderColumn = emissionMetric;
+          }
+
           if (rankingLimit != null) {
             normalizedRows = normalizedRows.slice(0, rankingLimit);
           }
@@ -488,6 +689,12 @@ export async function runAgent({
             enrichedRows = enrichedRows.slice(0, rankingLimit);
           }
         }
+        if (detectEmissionsDataIntent(userMessage)) {
+          enrichedRows = filterZeroEmissionRows(enrichedRows);
+          if (rankingLimit != null) {
+            enrichedRows = enrichedRows.slice(0, rankingLimit);
+          }
+        }
         
         if (onProgress) {
           onProgress({ 
@@ -527,11 +734,20 @@ export async function runAgent({
     customInfo = `\nCustom uploaded companies: ${customCompanies.map((c) => c.company).join(', ')}.`;
   }
 
+  const metricAliases = resolveMetricAliases(userMessage);
+  maybeLogUnresolvedEsgPhrase(userMessage, metricAliases);
+
   messages.push({
     role: 'system',
     content: (systemInstruction || SYSTEM_PROMPT) + customInfo
       + (requestedYears.length
         ? `\nUser-requested year(s): ${requestedYears.join(', ')}. Use ONLY these year values in SQL filters and citations.`
+        : '')
+      + (metricAliases.systemHint || '')
+      + (pipelineMeta?.systemAddon || '')
+      + noFabricationSystemAddon()
+      + (pipelineMeta?.resolvedCompany
+        ? `\nResolved company entity: ${pipelineMeta.resolvedCompany}. Prefer this exact name in SQL LIKE filters.`
         : ''),
   });
 
@@ -542,7 +758,11 @@ export async function runAgent({
     });
   });
 
-  messages.push({ role: 'user', content: userMessage });
+  // Clarify synonym-mapped questions so the model does not refuse with the unavailable template.
+  const userContent = metricAliases.columns.length
+    ? `${userMessage}\n\n(Note: In this BRSR database, interpret that metric as column(s): ${metricAliases.columns.join(', ')}. Answer using those — do not say unavailable.)`
+    : userMessage;
+  messages.push({ role: 'user', content: userContent });
 
   let iteration = 0;
 
@@ -581,12 +801,17 @@ export async function runAgent({
               ...messages,
               {
                 role: 'user',
-                content: 'Using the tool results already available, provide the final answer now. If the asked metric is unavailable or out-of-box, reply in 1–2 short sentences only (no Executive Summary / Key Findings / Analysis / Recommendation headings). Otherwise use the structured analysis format. Include page citations and PDF links only when tool results provide <metric>_citation / ready_citations; otherwise show metric values only with no source links. Do not call more tools.',
+                content: 'Using the tool results already available, provide the final answer now. If the asked metric is unavailable or out-of-box, reply in 1–2 short sentences only (no Executive Summary / Key Findings / Analysis / Recommendation headings). Otherwise use the structured analysis format. For charts, emit a fenced ```json-chart block with chartType, title, labels, and datasets — never a markdown image like ![Emissions Trend Chart](...). Include page citations inline next to values only when tool results provide <metric>_citation / ready_citations with a real PDF URL (prefer /local-pdf/…). Never invent a Citations/Sources footer, “full report here” links, empty [here](...), or NSE archive URLs. If no citation URL is provided, show metric values only with no source links. Do not call more tools.',
               },
             ]
           : messages,
         tools: toolsForCall,
-        options: config.options,
+        options: finalIteration || hasToolResults
+          ? {
+              ...config.options,
+              num_predict: config.finalNumPredict || config.options?.num_predict || 2048,
+            }
+          : config.options,
         keepAlive: config.keepAlive,
         stream: useStream,
         onToken: useStream
@@ -655,7 +880,20 @@ export async function runAgent({
       let finalText = assistantMessage.content || '';
       finalText = normalizeChartJson(finalText);
       finalText = upgradeReportCitations(finalText, seenSourceRows);
+      finalText = repairResponseMedia(finalText);
+      finalText = normalizeChartJson(finalText);
+      // Hard guard: synonym-mapped metrics must never get the "not available" template.
+      if (looksLikeFalseUnavailableRefusal(finalText) && metricAliases.columns.length) {
+        logMetricAliasEvent({
+          type: 'false_unavailable_repaired',
+          userMessage,
+          detail: { columns: metricAliases.columns, matchIds: metricAliases.matches.map((m) => m.id) },
+        });
+      }
+      finalText = repairFalseUnavailableAnswer(finalText, metricAliases);
 
+      // Unified answer validation — reject sample lists / fabricated rankings.
+      const hasToolEvidence = messages.some((m) => m.role === 'tool');
       let citationVerification = null;
       const uniqueSourceRows = dedupeSourceRows(seenSourceRows);
       const verifyCitations = process.env.VERIFY_CITATIONS !== 'false';
@@ -672,6 +910,73 @@ export async function runAgent({
         }
       }
 
+      let sqlRepairResult = null;
+      if (pipelineMeta?.classification) {
+        // Pre-fetch SQL repair candidate for list incompleteness (same as before).
+        const preCheck = validateResponse({
+          text: finalText,
+          intent: pipelineMeta.classification.intent,
+          wantsAll: pipelineMeta.classification.wantsAll,
+          classification: pipelineMeta.classification,
+          source: 'llm',
+          hasToolEvidence,
+        });
+        if (!preCheck.ok && /sample_instead_of_all|incomplete_list/.test(preCheck.reason || '')) {
+          try {
+            const { runSqlAgent } = await import('./sql-agent/sql-agent.js');
+            sqlRepairResult = await runSqlAgent({
+              plan: pipelineMeta.plan,
+              classification: { ...pipelineMeta.classification, wantsAll: true },
+              memory: pipelineMeta.memory,
+            });
+          } catch (repairErr) {
+            console.warn('[Validator] list repair failed:', repairErr.message);
+          }
+        }
+      }
+
+      const applied = await applyAnswerValidation(
+        {
+          text: finalText,
+          classification: pipelineMeta?.classification || null,
+          executionPlan: null,
+          engineResults: [],
+          data: null,
+          citations: [],
+          source: 'llm',
+          hasToolEvidence,
+          wantsAll: pipelineMeta?.classification?.wantsAll,
+          sqlResult: sqlRepairResult,
+        },
+        {
+          sqlResult: sqlRepairResult,
+          citationVerification,
+        },
+      );
+      finalText = applied.text;
+      const llmValidation = applied.validation;
+
+      logPipelineStage('response_validate', {
+        intent: pipelineMeta?.classification?.intent || null,
+        mode: 'llm',
+        tool: 'LLM',
+        ok: llmValidation.ok,
+        verdict: llmValidation.verdict,
+        reason: llmValidation.reason,
+        errors: llmValidation.errors,
+        warnings: llmValidation.warnings,
+        hasToolEvidence,
+        repairActions: applied.repairActions,
+      });
+
+      logPipelineStage('response', {
+        intent: pipelineMeta?.classification?.intent || null,
+        mode: 'llm',
+        tool: 'LLM',
+        ok: true,
+        hasToolEvidence,
+      });
+
       return {
         text: finalText,
         citationVerification,
@@ -684,136 +989,16 @@ export async function runAgent({
               content: isLast ? finalText : (m.content || ''),
             };
           }),
+        pipeline: pipelineMeta
+          ? {
+              intent: pipelineMeta.classification?.intent,
+              mode: pipelineMeta.route?.mode,
+              strategy: pipelineMeta.plan?.strategy,
+            }
+          : null,
       };
     }
   }
 
   throw new Error('Agent failed to complete reasoning within the iteration limit.');
-}
-
-function normalizeChartJson(text) {
-  if (!text) return text;
-  const chartBlockRegex = /(```json-chart\s*)([\s\S]*?)(\s*```)/g;
-  return text.replace(chartBlockRegex, (match, p1, p2, p3) => {
-    try {
-      // Strip comments from the JSON string
-      const cleanJsonString = p2
-        .replace(/\/\/.*$/gm, '') // strip single-line comments
-        .replace(/\/\*[\s\S]*?\*\//g, ''); // strip block comments
-
-      const json = JSON.parse(cleanJsonString.trim());
-      let changed = false;
-
-      // Lift "labels", "datasets", "series", "values" from nested "data" object if present
-      if (json.data && typeof json.data === 'object' && !Array.isArray(json.data)) {
-        const d = json.data;
-        if (d.labels && !json.labels) {
-          json.labels = d.labels;
-          changed = true;
-        }
-        if (d.datasets && !json.datasets) {
-          json.datasets = d.datasets;
-          changed = true;
-        }
-        if (d.series && !json.datasets) {
-          json.datasets = d.series;
-          changed = true;
-        }
-        if (d.values && !json.datasets) {
-          json.datasets = [
-            {
-              label: json.title || 'Value',
-              data: d.values
-            }
-          ];
-          changed = true;
-        }
-        delete json.data;
-        changed = true;
-      }
-      
-      // Map "series" to "datasets"
-      if (json.series && !json.datasets) {
-        json.datasets = json.series;
-        delete json.series;
-        changed = true;
-      }
-
-      // Map "values" (direct array of numbers) to a single dataset
-      if (Array.isArray(json.values) && !json.datasets) {
-        json.datasets = [
-          {
-            label: json.title || 'Value',
-            data: json.values
-          }
-        ];
-        delete json.values;
-        changed = true;
-      }
-
-      // Map "data" (direct array of numbers) at root to a single dataset
-      if (Array.isArray(json.data) && !json.datasets) {
-        json.datasets = [
-          {
-            label: json.title || 'Value',
-            data: json.data
-          }
-        ];
-        delete json.data;
-        changed = true;
-      }
-      
-      // Map "name" to "label" inside datasets, and handle nested object arrays like [{company, value}]
-      if (Array.isArray(json.datasets)) {
-        let labelsFromObjects = [];
-        let dataFromObjects = [];
-        let objectFormatFound = false;
-
-        json.datasets = json.datasets.map(d => {
-          if (typeof d === 'object' && d !== null) {
-            if (d.name && !d.label) {
-              d.label = d.name;
-              delete d.name;
-              changed = true;
-            }
-
-            if (Array.isArray(d.data)) {
-              const allObjects = d.data.every(item => typeof item === 'object' && item !== null && 'value' in item);
-              if (allObjects && d.data.length > 0) {
-                objectFormatFound = true;
-                dataFromObjects = d.data.map(item => item.value);
-                labelsFromObjects = d.data.map(item => item.company || item.name || item.label || '');
-                d.data = dataFromObjects;
-                changed = true;
-              }
-            }
-          }
-          return d;
-        });
-
-        if (objectFormatFound && labelsFromObjects.length > 0 && (!json.labels || json.labels.length !== labelsFromObjects.length)) {
-          json.labels = labelsFromObjects;
-          changed = true;
-        }
-      }
-      
-      // Ensure "type": "chart" is present
-      if (!json.type) {
-        json.type = 'chart';
-        changed = true;
-      }
-      
-      // Ensure "chartType" is present
-      if (!json.chartType) {
-        json.chartType = 'bar';
-        changed = true;
-      }
-      
-      // Re-serialize with clean formatting (comments removed)
-      return `${p1}${JSON.stringify(json, null, 2)}${p3}`;
-    } catch (e) {
-      // If parsing fails, just return original match
-    }
-    return match;
-  });
 }

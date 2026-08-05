@@ -1,0 +1,43 @@
+[
+  {
+    "id": "sector-tech-avg-emissions",
+    "category": "sector-analysis",
+    "tier": "smoke",
+    "question": "What is the average Scope 1 emissions in the Technology sector for 2024?",
+    "expected": {
+      "intent": "SECTOR_SUMMARY",
+      "metric": "scope1_emissions",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"]
+    },
+    "score": { "routing": true, "entity": false, "metric": true, "year": true }
+  },
+  {
+    "id": "sector-list-financials",
+    "category": "sector-analysis",
+    "tier": "smoke",
+    "question": "List companies in Financial Services sector",
+    "expected": {
+      "intent": "FILTER_BY_SECTOR",
+      "executionStrategy": "analytics",
+      "engines": ["analytics"]
+    },
+    "score": { "routing": true, "entity": false, "metric": false, "year": false }
+  },
+  {
+    "id": "sector-top-energy-emissions",
+    "category": "sector-analysis",
+    "tier": "full",
+    "question": "Top companies by Scope 1 emissions in the Energy sector for 2024",
+    "expected": {
+      "intent": "TOP_METRIC",
+      "metric": "scope1_emissions",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"],
+      "answerValidation": "PASS_OR_WARNING"
+    },
+    "score": { "routing": true, "metric": true, "year": true, "entity": false, "numeric": true }
+  }
+]

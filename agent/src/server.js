@@ -159,11 +159,63 @@ import('../scripts/preprocess.js').then(module => {
 // API: Get database status & available reports
 app.get('/api/status', async (req, res) => {
   try {
+    await loadPromise;
+    const { getLastDbHealth, checkDbHealth } = await import('./db-health.js');
+    const db = await getDb();
+    const health = await checkDbHealth(db);
     const reports = await getAvailableReports();
     res.json({
       success: true,
       reportsCount: reports.length,
-      reports
+      reports,
+      database: {
+        ok: health.ok,
+        dialect: health.dialect,
+        fallback: health.fallback,
+        latencyMs: health.latencyMs,
+        companyCount: health.companyCount,
+        error: health.error,
+        checkedAt: health.checkedAt,
+      },
+    });
+  } catch (error) {
+    const { getLastDbHealth } = await import('./db-health.js').catch(() => ({ getLastDbHealth: () => null }));
+    res.status(503).json({
+      success: false,
+      error: error.message,
+      database: getLastDbHealth?.() || { ok: false, error: error.message },
+    });
+  }
+});
+
+// Phase 14 — production monitoring snapshot (planner / fallback / validation rates)
+app.get('/api/monitoring', async (req, res) => {
+  try {
+    const {
+      getMonitoringSnapshot,
+      aggregateObservabilityLog,
+      flushMonitoringSnapshot,
+    } = await import('./observability/monitoring.js');
+    const flush = String(req.query.flush || '') === '1';
+    const snapshot = flush ? flushMonitoringSnapshot() : getMonitoringSnapshot();
+    const historical = aggregateObservabilityLog({ maxLines: Number(req.query.lines) || 2000 });
+    res.json({
+      success: true,
+      live: snapshot,
+      historical: {
+        ok: historical.ok,
+        events: historical.events,
+        byStage: historical.byStage,
+        planValidationFailures: historical.planValidationFailures,
+        responseValidationFailures: historical.responseValidationFailures,
+        clarifications: historical.clarifications,
+        sqlDocumentFallbacks: historical.sqlDocumentFallbacks,
+        pdfSources: historical.pdfSources,
+        narrativeSources: historical.narrativeSources,
+        averageLatencyMs: historical.averageLatencyMs,
+        pdfFallbackRate: historical.pdfFallbackRate,
+        clarificationRate: historical.clarificationRate,
+      },
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -174,14 +226,17 @@ app.get('/api/status', async (req, res) => {
 app.get('/api/config', (req, res) => {
   const useOpenAI = Boolean(process.env.OPENAI_API_KEY?.trim());
   const useOpenRouter = Boolean(process.env.OPENROUTER_API_KEY?.trim());
+  const fixedModel = useOpenAI
+    ? (process.env.OPENAI_MODEL || 'gpt-4o-mini')
+    : useOpenRouter
+      ? (process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini')
+      : (process.env.OLLAMA_MODEL || 'qwen2.5:7b');
   res.json({
-    defaultModel: useOpenAI
-      ? (process.env.OPENAI_MODEL || 'gpt-4o-mini')
-      : useOpenRouter
-        ? (process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini')
-        : (process.env.OLLAMA_MODEL || 'qwen2.5:7b'),
+    defaultModel: fixedModel,
     ollamaHost: process.env.OLLAMA_HOST || 'http://localhost:11434',
     provider: useOpenAI ? 'openai' : useOpenRouter ? 'openrouter' : 'ollama',
+    // When OpenAI is configured, the model is fixed via OPENAI_MODEL (no client override).
+    modelFixed: useOpenAI,
     firebase: getPublicFirebaseConfig(),
     authEnabled: isFirebaseAuthConfigured(),
   });
@@ -345,15 +400,78 @@ app.post('/api/delete-report', async (req, res) => {
   }
 });
 
+// API: Full / paginated company list export (BRSR reports table)
+app.get('/api/companies', async (req, res) => {
+  try {
+    await loadPromise;
+    if (startupError) {
+      return res.status(503).json({ success: false, error: 'Service unavailable' });
+    }
+    const { getCompanyList: listFn } = await import('./db.js');
+    const { paginateArray, toCsv, normalizePageParams } = await import('./pagination/pagination.js');
+    const sector = typeof req.query.sector === 'string' ? req.query.sector.trim() : '';
+    const format = String(req.query.format || 'json').toLowerCase();
+    let companies = await listFn();
+    if (sector) {
+      const db = await getDb();
+      const rows = await db.all(
+        `SELECT DISTINCT company FROM reports WHERE lower(COALESCE(sector,'')) = lower(?) ORDER BY company`,
+        [sector],
+      );
+      companies = rows.map((r) => r.company);
+    }
+    const { page, pageSize } = normalizePageParams(req.query.page, req.query.limit || req.query.pageSize);
+    const all = String(req.query.all || '') === '1' || format === 'csv';
+    const paged = all
+      ? {
+          items: companies,
+          page: 1,
+          pageSize: companies.length,
+          total: companies.length,
+          totalPages: 1,
+          hasNext: false,
+          hasPrev: false,
+        }
+      : paginateArray(companies, { page, pageSize });
+
+    if (format === 'csv') {
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="brsr_companies.csv"');
+      return res.send(toCsv(paged.items.map((c) => ({ company: c })), ['company']));
+    }
+
+    return res.json({
+      success: true,
+      total: paged.total,
+      page: paged.page,
+      pageSize: paged.pageSize,
+      totalPages: paged.totalPages,
+      hasNext: paged.hasNext,
+      hasPrev: paged.hasPrev,
+      sector: sector || null,
+      companies: paged.items,
+      exportCsv: `/api/companies?format=csv${sector ? `&sector=${encodeURIComponent(sector)}` : ''}`,
+    });
+  } catch (error) {
+    console.error('[api/companies]', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // API: Agent Chat with SSE streaming
 app.post('/api/chat', async (req, res) => {
-  const { message, chatHistory = [], modelName = null, ollamaHost = null } = req.body;
+  const { message, chatHistory = [], modelName = null, ollamaHost = null, sessionId = null } = req.body;
 
   if (!message) {
     return res.status(400).json({ success: false, error: 'Message is required.' });
   }
 
   console.log(`[User Question] Received: "${message}"`);
+
+  // OpenAI is the fixed cloud model — ignore client modelName/ollamaHost overrides.
+  const useOpenAI = Boolean(process.env.OPENAI_API_KEY?.trim());
+  const effectiveModelName = useOpenAI ? null : modelName;
+  const effectiveOllamaHost = useOpenAI ? null : ollamaHost;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -379,8 +497,9 @@ app.post('/api/chat', async (req, res) => {
     const result = await runAgent({
       userMessage: message,
       chatHistory,
-      modelName,
-      ollamaHost,
+      modelName: effectiveModelName,
+      ollamaHost: effectiveOllamaHost,
+      sessionId,
       signal: abortController.signal,
       onProgress: (progress) => {
         sendEvent(progress);
@@ -390,7 +509,8 @@ app.post('/api/chat', async (req, res) => {
     sendEvent({
       status: 'done',
       text: result.text,
-      chatHistory: result.chatHistory
+      chatHistory: result.chatHistory,
+      pipeline: result.pipeline || null,
     });
     
     res.end();

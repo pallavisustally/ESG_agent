@@ -1,0 +1,61 @@
+[
+  {
+    "id": "analytics-infosys-scope1-2024",
+    "category": "analytics",
+    "tier": "smoke",
+    "question": "What are Infosys Scope 1 emissions in 2024?",
+    "expected": {
+      "intent": "METRIC_LOOKUP",
+      "entities": ["Infosys"],
+      "metric": "scope1_emissions",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"],
+      "enginesMode": "superset"
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": true, "numeric": false, "chart": false, "citation": false }
+  },
+  {
+    "id": "analytics-tcs-female-share-2024",
+    "category": "analytics",
+    "tier": "smoke",
+    "question": "What is TCS female employee share in 2024?",
+    "expected": {
+      "intent": "METRIC_LOOKUP",
+      "entities": ["TCS"],
+      "metric": "female_employee_share",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"]
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": true }
+  },
+  {
+    "id": "analytics-company-count",
+    "category": "analytics",
+    "tier": "smoke",
+    "question": "How many companies have BRSR data?",
+    "expected": {
+      "intent": "COUNT_COMPANIES",
+      "executionStrategy": "analytics",
+      "engines": ["analytics"]
+    },
+    "score": { "routing": true, "entity": false, "metric": false, "year": false }
+  },
+  {
+    "id": "analytics-water-consumption-lookup",
+    "category": "analytics",
+    "tier": "full",
+    "question": "What is Wipro water consumption in 2024?",
+    "expected": {
+      "intent": "METRIC_LOOKUP",
+      "entities": ["Wipro"],
+      "metric": "water_consumption",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"],
+      "answerValidation": "PASS_OR_WARNING"
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": true, "numeric": true }
+  }
+]

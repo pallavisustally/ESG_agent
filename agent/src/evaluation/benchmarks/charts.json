@@ -1,0 +1,48 @@
+[
+  {
+    "id": "charts-top5-bar",
+    "category": "charts",
+    "tier": "smoke",
+    "question": "Chart the top 5 companies by Scope 1 emissions in 2024",
+    "expected": {
+      "intent": "TOP_METRIC",
+      "metric": "scope1_emissions",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"],
+      "chart": { "required": true, "chartType": "bar" }
+    },
+    "score": { "routing": true, "entity": false, "metric": true, "year": true, "chart": true }
+  },
+  {
+    "id": "charts-compare-bar",
+    "category": "charts",
+    "tier": "smoke",
+    "question": "Compare Infosys and TCS Scope 1 in 2024 as a bar chart",
+    "expected": {
+      "intent": "COMPARE_COMPANIES",
+      "entities": ["Infosys", "TCS"],
+      "metric": "scope1_emissions",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"],
+      "chart": { "required": true }
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": true, "chart": true }
+  },
+  {
+    "id": "charts-pie-composition",
+    "category": "charts",
+    "tier": "full",
+    "question": "Show a pie chart of Infosys Scope 1 vs Scope 2 vs Scope 3 for 2024",
+    "expected": {
+      "entities": ["Infosys"],
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"],
+      "chart": { "required": true, "chartType": "pie" },
+      "answerValidation": "PASS_OR_WARNING"
+    },
+    "score": { "routing": true, "entity": true, "metric": false, "year": true, "chart": true, "numeric": true }
+  }
+]

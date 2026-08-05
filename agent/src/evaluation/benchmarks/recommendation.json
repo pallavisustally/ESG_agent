@@ -1,0 +1,70 @@
+[
+  {
+    "id": "recommendation-infosys-improve-esg",
+    "category": "recommendation",
+    "tier": "smoke",
+    "question": "Suggest how Infosys can improve its ESG score",
+    "expected": {
+      "executionStrategy": "recommendation",
+      "engines": ["analytics", "recommendation"],
+      "enginesMode": "superset",
+      "entities": ["Infosys"]
+    },
+    "score": { "routing": true, "entity": true, "metric": false, "year": false }
+  },
+  {
+    "id": "recommendation-infosys-scope1",
+    "category": "recommendation",
+    "tier": "smoke",
+    "question": "Suggest improvements for Infosys Scope 1 emissions",
+    "expected": {
+      "executionStrategy": "recommendation",
+      "engines": ["analytics", "recommendation"],
+      "enginesMode": "superset",
+      "entities": ["Infosys"],
+      "metric": "scope1_emissions"
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": false }
+  },
+  {
+    "id": "recommendation-wipro-reduce-emissions",
+    "category": "recommendation",
+    "tier": "smoke",
+    "question": "Recommend ways for Wipro to reduce emissions",
+    "expected": {
+      "executionStrategy": "recommendation",
+      "engines": ["analytics", "recommendation"],
+      "enginesMode": "superset",
+      "entities": ["Wipro"]
+    },
+    "score": { "routing": true, "entity": true, "metric": false, "year": false }
+  },
+  {
+    "id": "recommendation-infosys-went-up",
+    "category": "recommendation",
+    "tier": "smoke",
+    "question": "Infosys Scope 1 went up — what should they improve?",
+    "expected": {
+      "executionStrategy": "recommendation",
+      "engines": ["analytics", "recommendation"],
+      "enginesMode": "superset",
+      "entities": ["Infosys"],
+      "metric": "scope1_emissions"
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": false }
+  },
+  {
+    "id": "recommendation-tcs-water-full",
+    "category": "recommendation",
+    "tier": "full",
+    "question": "How can TCS improve water consumption?",
+    "expected": {
+      "executionStrategy": "recommendation",
+      "engines": ["analytics", "recommendation"],
+      "enginesMode": "superset",
+      "entities": ["TCS"],
+      "metric": "water_consumption"
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": false }
+  }
+]

@@ -6,6 +6,25 @@ import {
 
 const CITATION_RE = /p\.\s*(\d+)\s*\[source\]\(([^)]+)\)|\[p\.\s*(\d+)\]\(([^)]+)\)/gi;
 
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const list = Array.isArray(items) ? items : [];
+  const limit = Math.max(1, concurrency || 1);
+  const results = new Array(list.length);
+  let next = 0;
+
+  async function worker() {
+    while (next < list.length) {
+      const i = next;
+      next += 1;
+      results[i] = await mapper(list[i], i);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, list.length || 1) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
 function normalizePdfUrl(url) {
   if (!url) return null;
   return String(url).split('#')[0];
@@ -131,25 +150,24 @@ export async function verifySourceRowMetrics(row) {
 }
 
 export async function verifyParsedCitations(citations = []) {
-  const checks = [];
+  const concurrency = Math.max(1, parseInt(process.env.PDF_INDEX_CONCURRENCY, 10) || 3);
+  const list = Array.isArray(citations) ? citations : [];
 
-  for (const citation of citations) {
+  const checks = await mapWithConcurrency(list, concurrency, async (citation) => {
     if (!citation.pdfUrl || !citation.page) {
-      checks.push({
+      return {
         ...citation,
         verified: null,
         status: 'incomplete_citation',
-      });
-      continue;
+      };
     }
 
     if (citation.value == null) {
-      checks.push({
+      return {
         ...citation,
         verified: null,
         status: 'value_not_found_near_citation',
-      });
-      continue;
+      };
     }
 
     const result = await verifyValueOnPdfPage(
@@ -157,14 +175,14 @@ export async function verifyParsedCitations(citations = []) {
       citation.page,
       citation.value,
     );
-    checks.push({
+    return {
       ...citation,
       verified: result.verified,
       status: result.status,
       snippet: result.snippet,
       error: result.error || null,
-    });
-  }
+    };
+  });
 
   const verified = checks.filter((c) => c.verified === true).length;
   const failed = checks.filter((c) => c.verified === false).length;
@@ -188,12 +206,11 @@ export async function verifyAgentCitations(text, sourceRows = [], options = {}) 
   const parsedCitations = parseCitationsFromText(text);
   const responseVerification = await verifyParsedCitations(parsedCitations);
 
-  const sourceVerifications = [];
+  let sourceVerifications = [];
   if (auditSourceRows) {
-    for (const row of sourceRows) {
-      if (!row?.pdf_url) continue;
-      sourceVerifications.push(await verifySourceRowMetrics(row));
-    }
+    const rows = (sourceRows || []).filter((row) => row?.pdf_url);
+    const concurrency = Math.max(1, parseInt(process.env.PDF_INDEX_CONCURRENCY, 10) || 3);
+    sourceVerifications = await mapWithConcurrency(rows, concurrency, (row) => verifySourceRowMetrics(row));
   }
 
   const sourceVerified = sourceVerifications.reduce((sum, item) => sum + item.summary.verified, 0);

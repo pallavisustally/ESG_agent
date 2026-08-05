@@ -1,0 +1,46 @@
+[
+  {
+    "id": "compliance-what-is-cdp",
+    "category": "compliance",
+    "tier": "smoke",
+    "question": "What is CDP?",
+    "expected": {
+      "executionStrategy": "compliance",
+      "engines": ["compliance"]
+    },
+    "score": { "routing": true, "entity": false, "metric": false, "year": false }
+  },
+  {
+    "id": "compliance-gri-305",
+    "category": "compliance",
+    "tier": "smoke",
+    "question": "Explain GRI 305",
+    "expected": {
+      "executionStrategy": "compliance",
+      "engines": ["compliance"]
+    },
+    "score": { "routing": true, "entity": false, "metric": false, "year": false }
+  },
+  {
+    "id": "compliance-sfdr",
+    "category": "compliance",
+    "tier": "smoke",
+    "question": "What is SFDR?",
+    "expected": {
+      "executionStrategy": "compliance",
+      "engines": ["compliance"]
+    },
+    "score": { "routing": true, "entity": false, "metric": false, "year": false }
+  },
+  {
+    "id": "compliance-issb",
+    "category": "compliance",
+    "tier": "smoke",
+    "question": "What is ISSB?",
+    "expected": {
+      "executionStrategy": "compliance",
+      "engines": ["compliance"]
+    },
+    "score": { "routing": true, "entity": false, "metric": false, "year": false }
+  }
+]

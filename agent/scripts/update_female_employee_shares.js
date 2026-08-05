@@ -1,5 +1,5 @@
 /**
- * Recompute female_employee_* from XBRL headcount without wiping PDF/citation enrichment.
+ * Recompute female/male/total employee_* from XBRL headcount without wiping PDF/citation enrichment.
  * Prefer each filing's current-year headcount over another filing's previous-year fallback.
  * Usage: node agent/scripts/update_female_employee_shares.js
  */
@@ -36,7 +36,7 @@ async function main() {
   let parsedYears = 0;
   let errors = 0;
 
-  console.log(`Scanning ${files.length} XBRL file(s) for female employee headcount...`);
+  console.log(`Scanning ${files.length} XBRL file(s) for employee gender headcount...`);
 
   for (const filePath of files) {
     try {
@@ -54,7 +54,12 @@ async function main() {
         const femaleCount = metrics.female_employee_count ?? null;
         const totalCount = metrics.total_employee_count ?? null;
         const femaleShare = metrics.female_employee_share ?? null;
-        if (femaleShare == null && femaleCount == null && totalCount == null) continue;
+        const maleCount = metrics.male_employee_count ?? null;
+        const maleShare = metrics.male_employee_share ?? null;
+        if (
+          femaleShare == null && femaleCount == null && totalCount == null
+          && maleCount == null && maleShare == null
+        ) continue;
 
         // Current-year Section A headcount beats previous-year membership fallbacks.
         const priority = year === filingCurrentYear ? 2 : 1;
@@ -78,6 +83,8 @@ async function main() {
     const femaleCount = metrics.female_employee_count ?? null;
     const totalCount = metrics.total_employee_count ?? null;
     const femaleShare = metrics.female_employee_share ?? null;
+    const maleCount = metrics.male_employee_count ?? null;
+    const maleShare = metrics.male_employee_share ?? null;
 
     const row = await db.get(
       'SELECT id, data_json FROM reports WHERE company = ? AND year = ?',
@@ -95,6 +102,8 @@ async function main() {
       if (femaleCount != null) parsedJson.metrics.female_employee_count = femaleCount;
       if (totalCount != null) parsedJson.metrics.total_employee_count = totalCount;
       if (femaleShare != null) parsedJson.metrics.female_employee_share = femaleShare;
+      if (maleCount != null) parsedJson.metrics.male_employee_count = maleCount;
+      if (maleShare != null) parsedJson.metrics.male_employee_share = maleShare;
       dataJson = JSON.stringify(parsedJson);
     } catch {
       // keep original data_json if it cannot be patched
@@ -105,15 +114,18 @@ async function main() {
        SET female_employee_count = ?,
            total_employee_count = ?,
            female_employee_share = ?,
+           male_employee_count = ?,
+           male_employee_share = ?,
            data_json = ?
        WHERE company = ? AND year = ?`,
-      [femaleCount, totalCount, femaleShare, dataJson, company, year],
+      [femaleCount, totalCount, femaleShare, maleCount, maleShare, dataJson, company, year],
     );
     updated += 1;
   }
 
   const top = await db.all(
-    `SELECT company, female_employee_share, female_employee_count, total_employee_count
+    `SELECT company, female_employee_share, female_employee_count, total_employee_count,
+            male_employee_count, male_employee_share
      FROM reports
      WHERE year = 2025 AND female_employee_share IS NOT NULL AND total_employee_count >= 50
      ORDER BY female_employee_share DESC

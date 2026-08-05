@@ -1,0 +1,150 @@
+/**
+ * Canonical intent taxonomy (Phase 1) + mapping to legacy pipeline intents.
+ * Downstream planner/router still consume legacy INTENTS for compatibility.
+ */
+
+import { INTENTS } from './classify-intent.js';
+
+/** User-facing / LLM extraction intents from the production upgrade plan. */
+export const CANONICAL_INTENTS = Object.freeze({
+  LIST: 'LIST',
+  COUNT: 'COUNT',
+  LOOKUP: 'LOOKUP',
+  RANK: 'RANK',
+  COMPARE: 'COMPARE',
+  FILTER: 'FILTER',
+  TREND: 'TREND',
+  EXPLAIN: 'EXPLAIN',
+  INFORMATIONAL: 'INFORMATIONAL',
+  HOW_TO: 'HOW_TO',
+  COMPANY_SUMMARY: 'COMPANY_SUMMARY',
+  COMPANY_STRATEGY: 'COMPANY_STRATEGY',
+  GENERAL_ESG: 'GENERAL_ESG',
+  ANALYTICS: 'ANALYTICS',
+  FOLLOW_UP: 'FOLLOW_UP',
+  UNKNOWN: 'UNKNOWN',
+});
+
+const CANONICAL_SET = new Set(Object.values(CANONICAL_INTENTS));
+
+/**
+ * Map canonical extraction intent → legacy INTENTS used by planner/router/SQL agent.
+ * @param {string} canonical
+ * @param {{ order?: string, reportLookup?: boolean }} [hints]
+ */
+export function mapCanonicalToLegacy(canonical, hints = {}) {
+  const c = String(canonical || '').toUpperCase();
+  switch (c) {
+    case CANONICAL_INTENTS.LIST:
+      return INTENTS.LIST_ALL_COMPANIES;
+    case CANONICAL_INTENTS.COUNT:
+      return INTENTS.COUNT_COMPANIES;
+    case CANONICAL_INTENTS.LOOKUP:
+      return hints.reportLookup ? INTENTS.REPORT_LOOKUP : INTENTS.METRIC_LOOKUP;
+    case CANONICAL_INTENTS.RANK:
+      return hints.order === 'ASC' ? INTENTS.BOTTOM_METRIC : INTENTS.TOP_METRIC;
+    case CANONICAL_INTENTS.COMPARE:
+      return INTENTS.COMPARE_COMPANIES;
+    case CANONICAL_INTENTS.FILTER:
+      return INTENTS.FILTER_BY_SECTOR;
+    case CANONICAL_INTENTS.TREND:
+      return INTENTS.TREND_ANALYSIS;
+    case CANONICAL_INTENTS.EXPLAIN:
+    case CANONICAL_INTENTS.INFORMATIONAL:
+      return INTENTS.INFORMATIONAL;
+    case CANONICAL_INTENTS.GENERAL_ESG:
+      return INTENTS.GENERAL_ESG_QUESTION;
+    case CANONICAL_INTENTS.HOW_TO:
+      return INTENTS.HOW_TO;
+    case CANONICAL_INTENTS.COMPANY_SUMMARY:
+    case CANONICAL_INTENTS.COMPANY_STRATEGY:
+      return INTENTS.COMPANY_SUMMARY;
+    case CANONICAL_INTENTS.ANALYTICS:
+      return INTENTS.SECTOR_SUMMARY;
+    case CANONICAL_INTENTS.FOLLOW_UP:
+      return INTENTS.FOLLOW_UP;
+    default:
+      return INTENTS.UNKNOWN;
+  }
+}
+
+/** Map legacy intent → canonical label (for logging / memory). */
+export function mapLegacyToCanonical(legacy) {
+  switch (legacy) {
+    case INTENTS.LIST_ALL_COMPANIES:
+      return CANONICAL_INTENTS.LIST;
+    case INTENTS.COUNT_COMPANIES:
+      return CANONICAL_INTENTS.COUNT;
+    case INTENTS.METRIC_LOOKUP:
+    case INTENTS.REPORT_LOOKUP:
+      return CANONICAL_INTENTS.LOOKUP;
+    case INTENTS.TOP_METRIC:
+    case INTENTS.BOTTOM_METRIC:
+      return CANONICAL_INTENTS.RANK;
+    case INTENTS.COMPARE_COMPANIES:
+      return CANONICAL_INTENTS.COMPARE;
+    case INTENTS.FILTER_BY_SECTOR:
+      return CANONICAL_INTENTS.FILTER;
+    case INTENTS.TREND_ANALYSIS:
+      return CANONICAL_INTENTS.TREND;
+    case INTENTS.HOW_TO:
+      return CANONICAL_INTENTS.HOW_TO;
+    case INTENTS.INFORMATIONAL:
+      return CANONICAL_INTENTS.INFORMATIONAL;
+    case INTENTS.COMPANY_SUMMARY:
+      return CANONICAL_INTENTS.COMPANY_SUMMARY;
+    case INTENTS.GENERAL_ESG_QUESTION:
+      return CANONICAL_INTENTS.GENERAL_ESG;
+    case INTENTS.FOLLOW_UP:
+    case INTENTS.PAGINATE_CONTINUE:
+      return CANONICAL_INTENTS.FOLLOW_UP;
+    case INTENTS.SECTOR_SUMMARY:
+      return CANONICAL_INTENTS.ANALYTICS;
+    case INTENTS.CHART_REQUEST:
+      return CANONICAL_INTENTS.RANK;
+    default:
+      return CANONICAL_INTENTS.UNKNOWN;
+  }
+}
+
+export function isCanonicalIntent(value) {
+  return CANONICAL_SET.has(String(value || '').toUpperCase());
+}
+
+/** Normalize free-form LLM intent strings to a canonical value. */
+export function normalizeCanonicalIntent(raw) {
+  const s = String(raw || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  if (CANONICAL_SET.has(s)) return s;
+
+  const aliases = {
+    LIST_ALL: CANONICAL_INTENTS.LIST,
+    LIST_COMPANIES: CANONICAL_INTENTS.LIST,
+    LIST_ALL_COMPANIES: CANONICAL_INTENTS.LIST,
+    COUNT_COMPANIES: CANONICAL_INTENTS.COUNT,
+    TOP: CANONICAL_INTENTS.RANK,
+    TOP_N: CANONICAL_INTENTS.RANK,
+    TOP_METRIC: CANONICAL_INTENTS.RANK,
+    BOTTOM: CANONICAL_INTENTS.RANK,
+    BOTTOM_N: CANONICAL_INTENTS.RANK,
+    BOTTOM_METRIC: CANONICAL_INTENTS.RANK,
+    RANKING: CANONICAL_INTENTS.RANK,
+    COMPARE_COMPANIES: CANONICAL_INTENTS.COMPARE,
+    FILTER_BY_SECTOR: CANONICAL_INTENTS.FILTER,
+    SECTOR: CANONICAL_INTENTS.FILTER,
+    TREND_ANALYSIS: CANONICAL_INTENTS.TREND,
+    METRIC_LOOKUP: CANONICAL_INTENTS.LOOKUP,
+    REPORT_LOOKUP: CANONICAL_INTENTS.LOOKUP,
+    HOW_TO_GUIDANCE: CANONICAL_INTENTS.HOW_TO,
+    GUIDANCE: CANONICAL_INTENTS.HOW_TO,
+    INFORMATIONAL: CANONICAL_INTENTS.INFORMATIONAL,
+    DEFINITION: CANONICAL_INTENTS.INFORMATIONAL,
+    CONCEPT: CANONICAL_INTENTS.INFORMATIONAL,
+    KNOWLEDGE: CANONICAL_INTENTS.INFORMATIONAL,
+    GENERAL_ESG_QUESTION: CANONICAL_INTENTS.GENERAL_ESG,
+    ANALYTICS: CANONICAL_INTENTS.ANALYTICS,
+    FOLLOW_UP_EXPLANATION: CANONICAL_INTENTS.FOLLOW_UP,
+    PAGINATE_CONTINUE: CANONICAL_INTENTS.FOLLOW_UP,
+    STRATEGY: CANONICAL_INTENTS.COMPANY_STRATEGY,
+  };
+  return aliases[s] || CANONICAL_INTENTS.UNKNOWN;
+}

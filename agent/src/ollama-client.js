@@ -20,9 +20,11 @@ function isOpenRouterModelName(model) {
 }
 
 function resolveOpenAIModel(requestedModel) {
+  // Fixed production model: always use OPENAI_MODEL from env (ignore client overrides).
   const envModel = process.env.OPENAI_MODEL?.trim();
-  if (requestedModel && !isOpenRouterModelName(requestedModel)) return requestedModel;
   if (envModel) return envModel;
+  // Only fall back to a requested name if env is unset (local experimentation).
+  if (requestedModel && !isOpenRouterModelName(requestedModel)) return requestedModel;
   return 'gpt-4o-mini';
 }
 
@@ -48,14 +50,21 @@ function sleep(ms) {
 }
 
 export function getOllamaConfig(overrides = {}) {
+  const toolPredict = parseInt(process.env.OLLAMA_NUM_PREDICT, 10) || 1024;
+  // Longer budget for final synthesis (Week 4 fluency) — does not apply to tool-call turns unless forced.
+  const finalPredict = parseInt(process.env.AGENT_FINAL_NUM_PREDICT, 10)
+    || parseInt(process.env.OLLAMA_NUM_PREDICT_FINAL, 10)
+    || Math.max(toolPredict, 2048);
+  const useFinalBudget = Boolean(overrides.finalAnswer);
   const cloudOptions = {
     keepAlive: process.env.OLLAMA_KEEP_ALIVE || '30m',
     options: {
-      num_ctx: parseInt(process.env.OLLAMA_NUM_CTX, 10) || 4096,
-      num_predict: parseInt(process.env.OLLAMA_NUM_PREDICT, 10) || 1024,
+      num_ctx: parseInt(process.env.OLLAMA_NUM_CTX, 10) || 8192,
+      num_predict: useFinalBudget ? finalPredict : toolPredict,
       temperature: parseFloat(process.env.OLLAMA_TEMPERATURE) || 0.2,
     },
-    timeoutMs: parseInt(process.env.OLLAMA_TIMEOUT_MS, 10) || 180000,
+    finalNumPredict: finalPredict,
+    timeoutMs: parseInt(process.env.OLLAMA_TIMEOUT_MS, 10) || 90000,
   };
 
   if (useOpenAI()) {
@@ -88,11 +97,12 @@ export function getOllamaConfig(overrides = {}) {
     fallbackModels: [],
     keepAlive: process.env.OLLAMA_KEEP_ALIVE || '30m',
     options: {
-      num_ctx: parseInt(process.env.OLLAMA_NUM_CTX, 10) || 4096,
-      num_predict: parseInt(process.env.OLLAMA_NUM_PREDICT, 10) || 1024,
+      num_ctx: parseInt(process.env.OLLAMA_NUM_CTX, 10) || 8192,
+      num_predict: toolPredict,
       temperature: parseFloat(process.env.OLLAMA_TEMPERATURE) || 0.2,
     },
-    timeoutMs: parseInt(process.env.OLLAMA_TIMEOUT_MS, 10) || 180000,
+    finalNumPredict: finalPredict,
+    timeoutMs: parseInt(process.env.OLLAMA_TIMEOUT_MS, 10) || 90000,
   };
 }
 

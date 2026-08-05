@@ -19,10 +19,15 @@ const PDF_CACHE_DIR = process.env.PDF_CACHE_DIR
     ? '/tmp/pdf_cache'
     : resolveFromProject('data', 'pdf_cache'));
 
-const PAGE_TEXT_CACHE_MAX = parseInt(process.env.PDF_PAGE_TEXT_CACHE_MAX, 10) || 20;
+const PAGE_TEXT_CACHE_MAX = parseInt(process.env.PDF_PAGE_TEXT_CACHE_MAX, 10) || 50;
 const pageTextCache = new Map();
 
-const SHARE_METRICS = new Set(['female_employee_share', 'female_board_share', 'renewable_energy_share']);
+const SHARE_METRICS = new Set([
+  'female_employee_share',
+  'male_employee_share',
+  'female_board_share',
+  'renewable_energy_share',
+]);
 
 const MIN_METRIC_PAGE_SCORE = parseInt(process.env.MIN_METRIC_PAGE_SCORE, 10) || 18;
 
@@ -41,6 +46,7 @@ const METRIC_CONTEXT = {
   water_intensity: /\bwater\s+intensity\b/i,
   waste_intensity: /\bwaste\s+intensity\b/i,
   female_employee_share: /\bemployees?\s+and\s+workers\b|\bparticipation\b.*\bwomen\b|\bgender\b/i,
+  male_employee_share: /\bemployees?\s+and\s+workers\b|\bparticipation\b.*\bmen\b|\bgender\b|\bmale\b/i,
   female_board_share: /\bboard\s+of\s+directors\b|\bkey\s+management\b|\bkmp\b|\bwomen\b.*\bboard\b/i,
   safety_ltifr: /\bltifr\b|\blost\s+time\s+injury\b|\bsafety\s+incident\b/i,
 };
@@ -56,6 +62,12 @@ const NEGATIVE_PAGE_CONTEXT = [
 
 const BRSR_SHARE_ANCHORS = {
   female_employee_share: [
+    { pattern: /employees?\s+and\s+workers\s*\(including\s+differently\s+abled\)/i, score: 28 },
+    { pattern: /particulars.*\btotal\b.*\bmale\b.*\bfemale\b/i, score: 18 },
+    { pattern: /\bpermanent\s*\([de]\)/i, score: 10 },
+    { pattern: /\bessential\s+indicators?\b/i, score: 6 },
+  ],
+  male_employee_share: [
     { pattern: /employees?\s+and\s+workers\s*\(including\s+differently\s+abled\)/i, score: 28 },
     { pattern: /particulars.*\btotal\b.*\bmale\b.*\bfemale\b/i, score: 18 },
     { pattern: /\bpermanent\s*\([de]\)/i, score: 10 },
@@ -214,11 +226,25 @@ export async function downloadPdf(pdfUrl, hints = {}) {
     throw new Error('Failed to download PDF (not a remote url)');
   }
 
-  const response = await fetch(fetchUrl, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; SusTallyBRSR/1.0)',
-    },
-  });
+  const fetchTimeoutMs = Number(process.env.PDF_FETCH_TIMEOUT_MS);
+  const timeoutMs = Number.isFinite(fetchTimeoutMs) && fetchTimeoutMs > 0
+    ? fetchTimeoutMs
+    : 15000;
+  let response;
+  try {
+    response = await fetch(fetchUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; SusTallyBRSR/1.0)',
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err) {
+    const reason = /timeout|aborted|AbortError/i.test(String(err?.name || err?.message || err))
+      ? `fetch_timeout_${timeoutMs}ms`
+      : String(err?.message || err || 'fetch_failed');
+    markPdfDownloadFailed(pdfUrl, reason);
+    throw new Error(`Failed to download PDF (${reason})`);
+  }
 
   if (!response.ok) {
     markPdfDownloadFailed(pdfUrl, String(response.status));
@@ -387,6 +413,15 @@ function scoreShareMetricPage(pageText, metric, row = {}, pageIndex = 0) {
     if (Number.isFinite(share) && sharePercentOnPage(normalized, share)) score += 16;
   }
 
+  if (metric === 'male_employee_share') {
+    const male = Number(row.male_employee_count);
+    const total = Number(row.total_employee_count);
+    const share = Number(row.male_employee_share);
+    if (Number.isFinite(male) && male > 0 && wordBoundaryContains(normalized, male)) score += 12;
+    if (Number.isFinite(total) && total > 0 && wordBoundaryContains(normalized, total)) score += 12;
+    if (Number.isFinite(share) && sharePercentOnPage(normalized, share)) score += 16;
+  }
+
   if (metric === 'female_board_share') {
     const female = Number(row.female_board_count);
     const total = Number(row.total_board_count);
@@ -464,6 +499,82 @@ export async function getPdfPageTexts(pdfUrl) {
   if (!pdfUrl) return [];
   const pdfPath = await downloadPdf(pdfUrl);
   return extractPageTexts(pdfPath);
+}
+
+/**
+ * Lexical rank over an in-memory page-text array (every page, not metric_pages_json).
+ * Used by searchPdfPagesForQuery after full-PDF extraction.
+ */
+export function rankPdfPageTexts(pageTexts, {
+  query = '',
+  metric = null,
+  limit = 3,
+  minScore = 8,
+} = {}) {
+  const pages = Array.isArray(pageTexts) ? pageTexts : [];
+  const qTokens = String(query || '')
+    .toLowerCase()
+    .split(/\W+/)
+    .filter((t) => t.length > 2 && !/^(the|and|for|what|how|many|much|with|from|that|this|have|does|about)$/i.test(t));
+  if (metric) {
+    for (const part of String(metric).split('_')) {
+      if (part.length > 2) qTokens.push(part.toLowerCase());
+    }
+  }
+  const tokens = [...new Set(qTokens)].slice(0, 12);
+  const contextRe = metric && METRIC_CONTEXT[metric] ? METRIC_CONTEXT[metric] : null;
+
+  const scored = [];
+  // Full-document scan: every extracted page index, not a pre-indexed metric page map.
+  for (let i = 0; i < pages.length; i++) {
+    const normalized = normalizePageText(pages[i]);
+    const lower = normalized.toLowerCase();
+    let score = 0;
+    if (contextRe && contextRe.test(normalized)) score += 18;
+    for (const t of tokens) {
+      if (lower.includes(t)) score += 2;
+    }
+    score -= Math.min(12, pagePenalty(normalized, i) / 2);
+    if (score < minScore) continue;
+    scored.push({
+      page: i + 1,
+      score,
+      snippet: normalized.trim().slice(0, 420),
+    });
+  }
+
+  scored.sort((a, b) => b.score - a.score || a.page - b.page);
+  return {
+    hits: scored.slice(0, limit),
+    unavailable: false,
+    totalPages: pages.length,
+    scannedAllPages: true,
+  };
+}
+
+/**
+ * Lexical search of a single company's PDF.
+ * Downloads/extracts the full PDF (all pages via getPdfPageTexts → extractPageTexts),
+ * then ranks every page. Does not use metric_pages_json / citation page index.
+ */
+export async function searchPdfPagesForQuery(pdfUrl, {
+  query = '',
+  metric = null,
+  limit = 3,
+  minScore = 8,
+} = {}) {
+  if (!pdfUrl || !isUsablePdfUrl(pdfUrl)) {
+    return { hits: [], unavailable: true, totalPages: 0, scannedAllPages: false };
+  }
+
+  let pageTexts;
+  try {
+    pageTexts = await getPdfPageTexts(pdfUrl);
+  } catch {
+    return { hits: [], unavailable: true, totalPages: 0, scannedAllPages: false };
+  }
+
+  return rankPdfPageTexts(pageTexts, { query, metric, limit, minScore });
 }
 
 export async function verifyValueOnPdfPage(pdfUrl, pageNum, value, options = {}) {

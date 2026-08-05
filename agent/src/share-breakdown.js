@@ -76,6 +76,29 @@ export function buildShareBreakdown(row) {
     if (entry) breakdown.female_employee_share = entry;
   }
 
+  const maleEmployees = Number(row.male_employee_count);
+  let maleShare = Number(row.male_employee_share);
+  if (!Number.isFinite(maleShare) && Number.isFinite(femaleShare)) {
+    maleShare = Math.round((100 - femaleShare) * 100) / 100;
+  }
+  if (Number.isFinite(maleShare)) {
+    const maleNumerator = Number.isFinite(maleEmployees) && maleEmployees >= 0
+      ? maleEmployees
+      : (
+        Number.isFinite(femaleEmployees) && totalEmployees != null
+          ? Math.max(0, totalEmployees - femaleEmployees)
+          : null
+      );
+    const entry = buildShareEntry({
+      percent: maleShare,
+      numerator: maleNumerator,
+      denominator: totalEmployees,
+      numeratorLabel: 'male employees',
+      denominatorLabel: 'total employees',
+    });
+    if (entry) breakdown.male_employee_share = entry;
+  }
+
   const femaleBoard = Number(row.female_board_count);
   const totalBoard = Number(row.total_board_count);
   const femaleBoardShare = Number(row.female_board_share);

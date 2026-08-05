@@ -1,0 +1,48 @@
+[
+  {
+    "id": "comparisons-infosys-tcs-scope1",
+    "category": "comparisons",
+    "tier": "smoke",
+    "question": "Compare Infosys and TCS Scope 1 emissions in 2024",
+    "expected": {
+      "intent": "COMPARE_COMPANIES",
+      "entities": ["Infosys", "TCS"],
+      "metric": "scope1_emissions",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"]
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": true }
+  },
+  {
+    "id": "comparisons-three-companies-renewable",
+    "category": "comparisons",
+    "tier": "smoke",
+    "question": "Compare Wipro vs Infosys vs TCS on renewable energy share in 2024",
+    "expected": {
+      "intent": "COMPARE_COMPANIES",
+      "entities": ["Wipro", "Infosys", "TCS"],
+      "metric": "renewable_energy_share",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"]
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": true }
+  },
+  {
+    "id": "comparisons-tata-steel-jsw",
+    "category": "comparisons",
+    "tier": "full",
+    "question": "Compare Tata Steel and JSW Steel Scope 1 emissions for 2024",
+    "expected": {
+      "intent": "COMPARE_COMPANIES",
+      "entities": ["Tata Steel", "JSW Steel"],
+      "metric": "scope1_emissions",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"],
+      "answerValidation": "PASS_OR_WARNING"
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": true, "numeric": true }
+  }
+]

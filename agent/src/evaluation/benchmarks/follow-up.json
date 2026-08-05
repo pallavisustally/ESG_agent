@@ -1,0 +1,73 @@
+[
+  {
+    "id": "followup-chart-please",
+    "category": "follow-up",
+    "tier": "smoke",
+    "question": "show that as a chart",
+    "memory": {
+      "lastIntent": "TOP_METRIC",
+      "lastCompanies": ["Infosys Limited", "Tata Consultancy Services Limited", "Wipro Limited"],
+      "lastMetric": "scope1_emissions",
+      "lastYear": 2024,
+      "lastPageItems": ["Infosys Limited", "Tata Consultancy Services Limited", "Wipro Limited"]
+    },
+    "expected": {
+      "metric": "scope1_emissions",
+      "year": 2024,
+      "chart": { "required": true },
+      "executionStrategy": "analytics",
+      "engines": ["analytics"]
+    },
+    "score": { "routing": true, "entity": false, "metric": true, "year": true, "chart": true }
+  },
+  {
+    "id": "followup-same-companies-2023",
+    "category": "follow-up",
+    "tier": "smoke",
+    "question": "same for those companies in 2023",
+    "memory": {
+      "lastIntent": "COMPARE_COMPANIES",
+      "lastCompanies": ["Infosys Limited", "Wipro Limited"],
+      "lastMetric": "scope1_emissions",
+      "lastYear": 2024,
+      "comparisonContext": {
+        "companies": ["Infosys Limited", "Wipro Limited"],
+        "metric": "scope1_emissions",
+        "year": 2024
+      }
+    },
+    "expected": {
+      "entities": ["Infosys Limited", "Wipro Limited"],
+      "metric": "scope1_emissions",
+      "year": 2023,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"]
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": true }
+  },
+  {
+    "id": "followup-scope2-for-above",
+    "category": "follow-up",
+    "tier": "smoke",
+    "question": "Scope 2 for the above companies",
+    "memory": {
+      "lastIntent": "COMPARE_COMPANIES",
+      "lastCompanies": ["Infosys Limited", "Wipro Limited"],
+      "lastMetric": "scope1_emissions",
+      "lastYear": 2024,
+      "comparisonContext": {
+        "companies": ["Infosys Limited", "Wipro Limited"],
+        "metric": "scope1_emissions",
+        "year": 2024
+      }
+    },
+    "expected": {
+      "entities": ["Infosys Limited", "Wipro Limited"],
+      "metric": "scope2_emissions",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"]
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": true }
+  }
+]

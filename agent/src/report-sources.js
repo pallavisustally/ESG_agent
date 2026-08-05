@@ -46,6 +46,8 @@ export const CITABLE_METRICS = [
   'water_intensity',
   'waste_intensity',
   'female_employee_share',
+  'male_employee_share',
+  'male_employee_count',
   'female_board_share',
   'safety_ltifr',
 ];
@@ -132,9 +134,48 @@ export function resolveLocalPdfPath({ year, symbol, pdfUrl }) {
   return fs.existsSync(localPath) ? localPath : null;
 }
 
-/** Public URL for a downloaded PDF, or null if not on disk. */
-export function toPublicPdfUrl({ year, symbol, pdfUrl }) {
-  const localPath = resolveLocalPdfPath({ year, symbol, pdfUrl });
+/**
+ * Find a usable on-disk PDF for a company/year.
+ * Tries exact basenames from candidate URLs, then any single PDF in the folder.
+ * NSE remote URLs often 403 — local files are the citable source of truth.
+ */
+export function findLocalPdfForReport({ year, symbol, pdfUrl = null, altPdfUrls = [] } = {}) {
+  if (year == null || !symbol) return null;
+  const candidates = [pdfUrl, ...altPdfUrls].filter(Boolean);
+  for (const url of candidates) {
+    const exact = resolveLocalPdfPath({ year, symbol, pdfUrl: url });
+    if (exact) return exact;
+  }
+
+  const dir = path.join(
+    resolvePdfDir(),
+    String(year),
+    String(symbol).toUpperCase(),
+  );
+  if (!fs.existsSync(dir)) return null;
+
+  let pdfs = [];
+  try {
+    pdfs = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.pdf'));
+  } catch {
+    return null;
+  }
+  if (!pdfs.length) return null;
+
+  for (const url of candidates) {
+    const base = pdfBasename(url);
+    if (!base) continue;
+    const hit = pdfs.find((f) => f.toLowerCase() === base.toLowerCase());
+    if (hit) return path.join(dir, hit);
+  }
+
+  // One PDF in the company/year folder — use it even when DB pdf_url basename is wrong.
+  if (pdfs.length === 1) return path.join(dir, pdfs[0]);
+  pdfs.sort();
+  return path.join(dir, pdfs[0]);
+}
+
+function localPathToPublicUrl(localPath, year, symbol) {
   if (!localPath) return null;
   const filename = path.basename(localPath);
   return [
@@ -143,6 +184,12 @@ export function toPublicPdfUrl({ year, symbol, pdfUrl }) {
     encodeURIComponent(String(symbol).toUpperCase()),
     encodeURIComponent(filename),
   ].join('/');
+}
+
+/** Public URL for a downloaded PDF, or null if not on disk. */
+export function toPublicPdfUrl({ year, symbol, pdfUrl, altPdfUrls = [] } = {}) {
+  const localPath = findLocalPdfForReport({ year, symbol, pdfUrl, altPdfUrls });
+  return localPathToPublicUrl(localPath, year, symbol);
 }
 
 /** NSE (or other remote) PDF URL for a report row — used for download/index fallback. */
@@ -169,7 +216,7 @@ export function resolveRemotePdfUrlForRow(row) {
  *   1) local /local-pdf/... when file is on disk
  *   2) Hugging Face Hub URL when mapped
  *   3) Cloudflare R2 URL when mapped
- *   4) NSE attachment URL as fallback
+ *   4) null — do NOT expose NSE archive URLs (they typically 403 in the browser)
  */
 export function resolvePdfUrlForRow(row) {
   if (row?.pdf_unavailable) return null;
@@ -185,8 +232,14 @@ export function resolvePdfUrlForRow(row) {
   const symbol = meta?.symbol;
   const pdfHint = remoteUrl || meta?.pdfUrl || null;
 
-  if (remoteUrl) {
-    const localPublic = toPublicPdfUrl({ year, symbol, pdfUrl: remoteUrl });
+  // Prefer any locally served PDF for this company/year (metadata basename or folder fallback).
+  if (year != null && symbol) {
+    const localPublic = toPublicPdfUrl({
+      year,
+      symbol,
+      pdfUrl: remoteUrl || meta?.pdfUrl || null,
+      altPdfUrls: [meta?.pdfUrl, row?.pdf_url, row?.report_pdf_url].filter(Boolean),
+    });
     if (localPublic) return localPublic;
   }
 
@@ -203,7 +256,8 @@ export function resolvePdfUrlForRow(row) {
     }
   }
 
-  return isUsablePdfUrl(remoteUrl) ? remoteUrl : null;
+  // No openable PDF — omit links rather than pointing at blocked NSE archives.
+  return null;
 }
 
 /** SQL aliases that mean this row is a computed aggregate, not a company filing. */
@@ -528,6 +582,8 @@ const METRIC_LINE_HINTS = {
   water_intensity: /\bwater intensity\b/i,
   waste_intensity: /\bwaste intensity\b/i,
   female_employee_share: /\bfemale\b|\bworkforce\b|\bdiversity\b|\bgender\b|\bemployee share\b/i,
+  male_employee_share: /\bmale\b|\bmen\b|\bworkforce\b|\bdiversity\b|\bgender\b|\bemployee share\b/i,
+  male_employee_count: /\bmale\b|\bmen\b|\bemployee\b|\bworkforce\b|\bheadcount\b/i,
   female_board_share: /\bboard\b|\bdirector\b/i,
   safety_ltifr: /\bltifr\b|\bsafety\b|\blost time\b/i,
   total_revenue: /\brevenue\b|\bturnover\b/i,
@@ -543,7 +599,7 @@ function lineMatchesMetric(line, metric) {
 
   const metricLabel = (line.match(/\*\*([^*]+)\*\*/)?.[1] || line.split(':')[0] || line).toLowerCase();
 
-  if ((metric === 'female_employee_share' || metric === 'female_board_share')
+  if ((metric === 'female_employee_share' || metric === 'male_employee_share' || metric === 'female_board_share')
     && EMISSION_OR_ENERGY_LINE_RE.test(metricLabel)
     && !/\bfemale\b|\bworkforce\b|\bdiversity\b|\bgender\b|\bboard\b/i.test(metricLabel)) {
     return false;
@@ -690,7 +746,13 @@ function lineAlreadyHasCitation(line) {
 }
 
 function stripSourcesFooter(text) {
-  return text.replace(/\n##\s*Sources[\s\S]*$/i, '').trimEnd();
+  return String(text || '')
+    .replace(/\n##\s*Sources[\s\S]*$/i, '')
+    .replace(/\n##\s*Citations[\s\S]*$/i, '')
+    .replace(/\n\*\*Citations:\*\*[\s\S]*$/i, '')
+    .replace(/\n\*\*Sources:\*\*[\s\S]*$/i, '')
+    .replace(/\nCitations:\s*\n[\s\S]*$/i, '')
+    .trimEnd();
 }
 
 const SECTOR_HEADING_RE = /^(#{1,4}\s+)?(Materials|Consumer Services|Telecommunications|Other\/Industrial|Healthcare|Utilities|Consumer Defensive|Consumer Cyclical|Financial Services|Energy(?:\s*&\s*Renewables)?|Industrials|Technology)\b/i;
@@ -720,6 +782,59 @@ function stripNonPdfCitationLinks(text) {
       return pageLabel ? `${space || ''}${pageLabel}` : '';
     },
   );
+}
+
+/** After local rewrites: drop any remaining blocked NSE archive citation links. */
+function stripBlockedRemoteCitationLinks(text) {
+  return String(text || '').replace(
+    /(\s*)(?:(p\.\s*\d+)\s*)?\[(?:source|report|here)\]\(([^)]+)\)/gi,
+    (full, space, pageLabel, url) => {
+      if (isOpenableCitationUrl(url)) return full;
+      // Keep page label when present; drop dead remote/NSE/empty links.
+      if (isUsablePdfUrl(url) && /nsearchives\.nseindia\.com/i.test(url)) {
+        return pageLabel ? `${space || ''}${pageLabel}` : '';
+      }
+      if (!isUsablePdfUrl(url)) {
+        return pageLabel ? `${space || ''}${pageLabel}` : '';
+      }
+      return full;
+    },
+  );
+}
+
+/** True when a citation URL is openable in the product UI (not blocked NSE archives). */
+function isOpenableCitationUrl(url) {
+  if (!isUsablePdfUrl(url)) return false;
+  const u = String(url).trim();
+  if (u.startsWith(LOCAL_PDF_MOUNT + '/')) return true;
+  if (/huggingface\.co\//i.test(u)) return true;
+  if (/\.r2\.dev\//i.test(u) || /r2\.cloudflarestorage\.com\//i.test(u)) return true;
+  // NSE archives typically return 403 in the browser — never treat as openable.
+  if (/nsearchives\.nseindia\.com/i.test(u)) return false;
+  return false;
+}
+
+/**
+ * Remove invented "full report here" CTAs and empty/broken here-links.
+ * Keep only verified p. N [source](…) citations from tool results.
+ */
+function stripInventedReportCtas(text) {
+  let out = String(text || '');
+  // Prose CTAs — drop the whole sentence (model-invented; citations already inline).
+  out = out.replace(
+    /\n?[^\n]*\bFor further details[^\n]*/gi,
+    '',
+  );
+  out = out.replace(
+    /\n?[^\n]*\b(?:you can )?refer to the full report[^\n]*/gi,
+    '',
+  );
+  // Markdown [here](...), [full report](...) — keep only openable local/HF/R2 PDFs.
+  out = out.replace(
+    /\[(?:here|full report|this report|the (?:full )?report)\]\(([^)]*)\)/gi,
+    (_, url) => (isOpenableCitationUrl(url) ? `[source](${String(url).trim()})` : ''),
+  );
+  return out;
 }
 
 function stripMisleadingCitationsFromAggregates(text, companyNames = []) {
@@ -757,6 +872,7 @@ export function upgradeReportCitations(text, sourceRows = []) {
 
   // Model often invents this label for single-company rows — always remove first.
   out = stripInventedSourceLabels(out);
+  out = stripInventedReportCtas(out);
   out = stripNonPdfCitationLinks(out);
 
   const byPdf = [];
@@ -786,6 +902,8 @@ export function upgradeReportCitations(text, sourceRows = []) {
     const localBase = pdfUrl.split('#')[0];
     out = out.replace(new RegExp(remoteBase, 'gi'), localBase);
   }
+  // Drop any NSE / non-openable citation links that could not be rewritten.
+  out = stripBlockedRemoteCitationLinks(out);
 
   // Company-local broken placeholders -> real citation (only when page exists)
   for (const { row, pdfUrl, preferredPage } of byPdf) {
@@ -877,12 +995,17 @@ export function upgradeReportCitations(text, sourceRows = []) {
     out = out.replace(/there are no available citations or PDF links for this report\.?/gi, '');
     out = out.replace(/However, there is no available PDF link[^.]*\./gi, '');
     out = out.replace(/The absence of a PDF link[^.]*\./gi, '');
+  } else {
+    // No openable PDF in context — drop any leftover invented report CTAs/links.
+    out = stripInventedReportCtas(out);
+    out = out.replace(/\s*\[(?:source|report|here)\]\([^)]*\)/gi, '');
   }
 
   out = normalizeLegacyCitations(out, byPdf);
   out = dedupeInlineCitations(out);
   out = stripMisleadingCitationsFromAggregates(out, companyNames);
   out = stripMalformedCitationLinks(out);
+  out = stripInventedReportCtas(out);
   out = stripIrrelevantShareBreakdowns(out);
   out = stripSourcesFooter(out);
 

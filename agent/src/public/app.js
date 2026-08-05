@@ -41,7 +41,8 @@ document.addEventListener('DOMContentLoaded', () => {
   function buildCitationHtml(page, url) {
     const trimmed = String(url || '').trim();
     const isPdf = /\.pdf($|\?|#)/i.test(trimmed) || /^\/local-pdf\/.+\.pdf($|\?|#)/i.test(trimmed);
-    const pageLabel = page ? `p. ${page}` : '';
+    const pageNum = Number(page);
+    const pageLabel = Number.isFinite(pageNum) && pageNum > 0 ? `p. ${pageNum}` : '';
     if (!trimmed || !isPdf || /\.(xml|xbrl)($|\?|#)/i.test(trimmed) || /\/xbrl\//i.test(trimmed)) {
       return pageLabel
         ? `<span class="metric-citation">${pageLabel}</span>`
@@ -69,6 +70,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     out = out.replace(/\[report\]\(([^)]+)\)/gi, (_, url) =>
       buildCitationHtml(null, url.trim())
+    );
+
+    // Invented "full report here" links — keep only when URL is a real PDF.
+    out = out.replace(/\[(?:here|full report|this report|the (?:full )?report)\]\(([^)]*)\)/gi, (_, url) =>
+      buildCitationHtml(null, String(url || '').trim())
+    );
+    out = out.replace(
+      /\n?For further details[^.\n]*(?:<a[\s\S]*?<\/a>|here)\.?/gi,
+      ''
+    );
+    out = out.replace(
+      /\n?You can refer to the full report[^.?\n]*(?:<a[\s\S]*?<\/a>|here)\.?/gi,
+      ''
     );
 
     // Repair broken HTML citations where href was stripped earlier
@@ -123,11 +137,20 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      const isPdfHref = /\.pdf($|\?|#)/i.test(href) || /^\/local-pdf\/.+\.pdf($|\?|#)/i.test(href);
+      const isOpenablePdf = /^\/local-pdf\/.+\.pdf($|\?|#)/i.test(href)
+        || /huggingface\.co\/.+\.pdf($|\?|#)/i.test(href)
+        || /\.r2\.dev\/.+\.pdf($|\?|#)/i.test(href)
+        || /r2\.cloudflarestorage\.com\/.+\.pdf($|\?|#)/i.test(href);
+      const isNseArchive = /nsearchives\.nseindia\.com/i.test(href);
       const isXmlHref = /\.(xml|xbrl)($|\?|#)/i.test(href) || /\/xbrl\//i.test(href);
-      // Never turn XBRL/XML (or other non-PDF) URLs into clickable "source" links.
-      if (!isPdfHref || isXmlHref) {
-        if (label === 'source' || label === 'report' || isXmlHref) {
+      const isInventedReportLabel = label === 'here'
+        || label === 'full report'
+        || label === 'this report'
+        || label === 'the report'
+        || label === 'the full report';
+      // Only local / HF / R2 PDFs are clickable. Drop NSE archives and non-PDF links.
+      if (!isOpenablePdf || isXmlHref || isNseArchive) {
+        if (label === 'source' || label === 'report' || isInventedReportLabel || isXmlHref || isNseArchive) {
           const pageMatch = anchor.parentElement?.textContent?.match(/p\.\s*(\d+)/i);
           const fallback = document.createElement('span');
           fallback.className = 'citation-missing';
@@ -141,7 +164,7 @@ document.addEventListener('DOMContentLoaded', () => {
       anchor.classList.add('citation-source-link');
       anchor.setAttribute('target', '_blank');
       anchor.setAttribute('rel', 'noopener noreferrer');
-      if (label === 'source' || label === 'report') {
+      if (label === 'source' || label === 'report' || isInventedReportLabel) {
         anchor.textContent = 'source';
       }
 
@@ -287,9 +310,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Configuration state loaded from the server
   let serverConfig = {
-    defaultModel: 'qwen2.5:7b',
+    defaultModel: 'gpt-4o-mini',
     ollamaHost: 'http://localhost:11434',
-    provider: 'ollama',
+    provider: 'openai',
+    modelFixed: true,
     firebase: null,
     authEnabled: false,
   };
@@ -539,11 +563,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   const getOllamaHost = () => {
-    if (serverConfig.provider === 'openrouter') return null;
+    if (serverConfig.provider !== 'ollama') return null;
     return localStorage.getItem('ollama_host') || serverConfig.ollamaHost;
   };
   const getOllamaModel = () => {
-    if (serverConfig.provider === 'openrouter') return serverConfig.defaultModel;
+    if (serverConfig.provider !== 'ollama') return serverConfig.defaultModel;
     return localStorage.getItem('ollama_model') || serverConfig.defaultModel;
   };
 
@@ -1174,6 +1198,96 @@ document.addEventListener('DOMContentLoaded', () => {
     return bubble;
   }
 
+  /** Strip invented Citations footers and turn fake chart images into json-chart from tables. */
+  function repairResponseMediaClient(text) {
+    let out = String(text || '');
+    out = out
+      .replace(/\n##\s*Sources[\s\S]*$/i, '')
+      .replace(/\n##\s*Citations[\s\S]*$/i, '')
+      .replace(/\n\*\*Citations:\*\*[\s\S]*$/i, '')
+      .replace(/\n\*\*Sources:\*\*[\s\S]*$/i, '')
+      .replace(/\nCitations:\s*\n[\s\S]*$/i, '')
+      .trimEnd();
+
+    const chartType = /\bline\s+chart\b/i.test(out) ? 'line' : (/\bpie\s+chart\b/i.test(out) ? 'pie' : 'bar');
+    const titleMatch = out.match(/!\[([^\]]*(?:chart|trend|graph|plot)[^\]]*)\]/i);
+    const title = (titleMatch && titleMatch[1]) || (/\bemissions?\s+trend\b/i.test(out) ? 'Emissions Trend Chart' : 'Chart');
+
+    function parseTables(src) {
+      const tables = [];
+      const lines = src.split('\n');
+      for (let i = 0; i < lines.length - 1; i += 1) {
+        if (!/^\s*\|.+\|\s*$/.test(lines[i]) || !/^\s*\|?\s*:?-{3,}/.test(lines[i + 1])) continue;
+        const headers = lines[i].split('|').map((c) => c.trim()).filter(Boolean);
+        const rows = [];
+        let j = i + 2;
+        while (j < lines.length && /^\s*\|.+\|\s*$/.test(lines[j])) {
+          const cells = lines[j].split('|').map((c) => c.trim()).filter(Boolean);
+          if (cells.length) rows.push(cells);
+          j += 1;
+        }
+        if (headers.length >= 2 && rows.length) {
+          tables.push({ headers, rows, raw: lines.slice(i, j).join('\n') });
+        }
+        i = j - 1;
+      }
+      return tables;
+    }
+
+    function numCell(v) {
+      const n = Number(String(v || '').replace(/,/g, '').replace(/[^\d.-]/g, ''));
+      return Number.isFinite(n) ? n : null;
+    }
+
+    function configFromTable(table) {
+      const headers = table.headers;
+      const labelIdx = Math.max(0, headers.findIndex((h) => /\byear\b/i.test(h)));
+      const metricIdx = [];
+      for (let i = 0; i < headers.length; i += 1) {
+        if (i === labelIdx) continue;
+        if (table.rows.some((r) => numCell(r[i]) != null)) metricIdx.push(i);
+      }
+      if (!metricIdx.length) return null;
+      return {
+        chartType,
+        title,
+        labels: table.rows.map((r) => String(r[labelIdx] || '').trim()),
+        datasets: metricIdx.map((idx) => ({
+          label: headers[idx],
+          data: table.rows.map((r) => numCell(r[idx]) ?? 0),
+        })),
+      };
+    }
+
+    const chartable = parseTables(out).map((t) => ({ table: t, config: configFromTable(t) })).filter((x) => x.config);
+    const hasJsonChart = /```json-chart\b/i.test(out);
+    let replacedImage = false;
+
+    out = out.replace(/!\[[^\]]*(?:chart|trend|graph|plot|emissions)[^\]]*\]\(([^)]*)\)/gi, (full, src) => {
+      const s = String(src || '').trim();
+      if (/^(https?:|\/local-pdf\/|data:)/i.test(s) && /\.(png|jpe?g|gif|webp|svg)($|\?)/i.test(s)) return full;
+      replacedImage = true;
+      if (chartable.length) {
+        return '```json-chart\n' + JSON.stringify(chartable[0].config, null, 2) + '\n```';
+      }
+      return '';
+    });
+
+    if (!hasJsonChart && !replacedImage && chartable.length && /\b(chart|graph|plot|trend)\b/i.test(out)) {
+      const first = chartable[0];
+      const block = '```json-chart\n' + JSON.stringify(first.config, null, 2) + '\n```';
+      const idx = out.indexOf(first.table.raw);
+      if (idx >= 0) {
+        const at = idx + first.table.raw.length;
+        out = out.slice(0, at) + '\n\n' + block + out.slice(at);
+      } else {
+        out = out.trimEnd() + '\n\n' + block;
+      }
+    }
+
+    return out;
+  }
+
   // Render assistant bubble (supporting markdown, KaTeX, and Chart.js parsing)
   function renderAssistantBubble(bubbleElement, text) {
     // Find target element to write content to
@@ -1190,11 +1304,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const chartRegex = /```(json-chart|chart|json)\s*([\s\S]*?)\s*```/g;
     let match;
     const chartsToRender = [];
-    let cleanedText = text;
+    let cleanedText = repairResponseMediaClient(text);
 
-    while ((match = chartRegex.exec(text)) !== null) {
+    while ((match = chartRegex.exec(cleanedText)) !== null) {
       try {
-        const fenceType = match[1];
         const jsonPayload = match[2];
 
         const chartData = JSON.parse(jsonPayload.trim());
@@ -1297,11 +1410,23 @@ document.addEventListener('DOMContentLoaded', () => {
         const wrapper = document.createElement('div');
         wrapper.className = 'chart-container-box';
         const isPieChart = chartItem.data.chartType === 'pie' || chartItem.data.chartType === 'doughnut';
+        const subtitle = chartItem.data.subtitle
+          ? `<div class="chart-subtitle">${chartItem.data.subtitle}</div>`
+          : '';
+        const metaBits = [];
+        if (chartItem.data.unit) metaBits.push(chartItem.data.unit);
+        if (chartItem.data.reportingYear) metaBits.push(`FY ${chartItem.data.reportingYear}`);
+        if (chartItem.data.source) metaBits.push(chartItem.data.source);
+        const meta = metaBits.length
+          ? `<div class="chart-meta">${metaBits.join(' · ')}</div>`
+          : '';
         wrapper.innerHTML = `
           <div class="chart-title">${chartItem.data.title || 'Data Comparison'}</div>
+          ${subtitle}
           <div class="chart-canvas-wrapper${isPieChart ? ' pie-chart' : ''}">
             <canvas id="${chartId}"></canvas>
           </div>
+          ${meta}
         `;
         ph.parentNode.replaceChild(wrapper, ph);
 
@@ -1312,15 +1437,73 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  /** Accept flat Chart.js config or nested { data: { labels, datasets } } from SQL agent. */
+  function normalizeChartConfig(raw) {
+    if (!raw || typeof raw !== 'object') {
+      return {
+        labels: [],
+        datasets: [],
+        chartType: 'bar',
+        title: '',
+        indexAxis: undefined,
+        xAxisLabel: undefined,
+        yAxisLabel: undefined,
+      };
+    }
+    const nested = raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data) ? raw.data : null;
+    const labels = Array.isArray(raw.labels)
+      ? raw.labels
+      : (Array.isArray(nested?.labels) ? nested.labels : []);
+    let datasets = Array.isArray(raw.datasets)
+      ? raw.datasets
+      : (Array.isArray(nested?.datasets) ? nested.datasets : null);
+    if (!datasets && Array.isArray(raw.series)) datasets = raw.series;
+    if (!datasets && Array.isArray(nested?.series)) datasets = nested.series;
+    if (!datasets && Array.isArray(raw.values)) {
+      datasets = [{ label: raw.title || 'Value', data: raw.values }];
+    }
+    if (!datasets && Array.isArray(raw.data)) {
+      datasets = [{ label: raw.title || 'Value', data: raw.data }];
+    }
+    if (!Array.isArray(datasets)) datasets = [];
+    let chartType = raw.chartType
+      || (raw.type && raw.type !== 'chart' ? raw.type : null)
+      || 'bar';
+    let indexAxis = raw.indexAxis;
+    if (chartType === 'horizontalBar') {
+      chartType = 'bar';
+      indexAxis = 'y';
+    }
+    if (chartType === 'groupedBar') chartType = 'bar';
+    return {
+      labels,
+      datasets,
+      chartType,
+      title: raw.title || '',
+      indexAxis,
+      xAxisLabel: raw.xAxisLabel,
+      yAxisLabel: raw.yAxisLabel,
+      showLegend: raw.showLegend,
+    };
+  }
+
   // Draw Chart.js visualization
   function drawChart(canvasId, chartData) {
     const canvas = document.getElementById(canvasId);
     if (!canvas) return;
 
+    const normalized = normalizeChartConfig(chartData);
+    if (!normalized.datasets.length) {
+      console.warn('Chart skipped: no datasets', chartData);
+      return;
+    }
+
     const ctx = canvas.getContext('2d');
-    const chartType = chartData.chartType || 'bar';
+    const chartType = normalized.chartType || 'bar';
     const isPie = chartType === 'pie' || chartType === 'doughnut';
     const isLine = chartType === 'line';
+    const isScatter = chartType === 'scatter';
+    const indexAxis = normalized.indexAxis === 'y' ? 'y' : 'x';
 
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
     const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(60,64,67,0.08)';
@@ -1338,11 +1521,11 @@ document.addEventListener('DOMContentLoaded', () => {
       { fill: 'rgba(234, 67, 53, 0.75)', border: '#ea4335' },
     ];
 
-    const datasets = chartData.datasets.map((ds, idx) => {
+    const datasets = normalized.datasets.map((ds, idx) => {
       const color = palette[idx % palette.length];
 
       if (isPie) {
-        const sliceCount = Math.max(ds.data?.length || 0, chartData.labels?.length || 0);
+        const sliceCount = Math.max(ds.data?.length || 0, normalized.labels?.length || 0);
         const sliceColors = Array.from({ length: sliceCount }, (_, i) => palette[i % palette.length]);
         return {
           label: ds.label,
@@ -1356,22 +1539,26 @@ document.addEventListener('DOMContentLoaded', () => {
       return {
         label: ds.label,
         data: ds.data,
-        backgroundColor: isLine ? 'transparent' : color.fill,
+        backgroundColor: isLine || isScatter ? color.fill.replace('0.75', '0.35') : color.fill,
         borderColor: color.border,
         borderWidth: 2,
         pointBackgroundColor: color.border,
         pointBorderColor: '#fff',
         pointHoverRadius: 6,
         tension: 0.35,
-        fill: isLine ? false : true,
+        fill: isLine || isScatter ? false : true,
+        showLine: isScatter ? false : undefined,
       };
     });
 
+    const showLegend = normalized.showLegend !== false;
     const options = {
       responsive: true,
       maintainAspectRatio: false,
+      indexAxis,
       plugins: {
         legend: {
+          display: showLegend,
           position: isPie ? 'right' : 'top',
           labels: {
             color: legendColor,
@@ -1403,13 +1590,27 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     if (!isPie) {
+      const valueAxis = indexAxis === 'y' ? 'x' : 'y';
+      const categoryAxis = indexAxis === 'y' ? 'y' : 'x';
       options.scales = {
-        y: {
+        [valueAxis]: {
+          type: isScatter ? 'linear' : undefined,
+          title: normalized.yAxisLabel && valueAxis === 'y'
+            ? { display: true, text: normalized.yAxisLabel, color: tickColor }
+            : (normalized.xAxisLabel && valueAxis === 'x'
+              ? { display: true, text: normalized.xAxisLabel, color: tickColor }
+              : undefined),
           grid: { color: gridColor, drawBorder: false },
           ticks: { color: tickColor, font: { family: 'Roboto', size: 11 } },
         },
-        x: {
-          grid: { display: false },
+        [categoryAxis]: {
+          type: isScatter ? 'linear' : undefined,
+          title: normalized.xAxisLabel && categoryAxis === 'x'
+            ? { display: true, text: normalized.xAxisLabel, color: tickColor }
+            : (normalized.yAxisLabel && categoryAxis === 'y'
+              ? { display: true, text: normalized.yAxisLabel, color: tickColor }
+              : undefined),
+          grid: { display: isScatter, color: gridColor },
           ticks: { color: tickColor, font: { family: 'Roboto', size: 11 }, maxRotation: 45 },
         },
       };
@@ -1418,7 +1619,7 @@ document.addEventListener('DOMContentLoaded', () => {
     new Chart(ctx, {
       type: chartType,
       data: {
-        labels: chartData.labels,
+        labels: normalized.labels,
         datasets,
       },
       options,
@@ -1545,8 +1746,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const requestBody = {
       message: text,
       chatHistory: chatHistory.slice(0, -1),
+      sessionId: currentSessionId || null,
     };
-    if (serverConfig.provider !== 'openrouter') {
+    // Only local Ollama allows client model/host overrides. OpenAI/OpenRouter use fixed env models.
+    if (serverConfig.provider === 'ollama') {
       requestBody.modelName = modelName;
       requestBody.ollamaHost = ollamaHost;
     }
@@ -1822,7 +2025,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (configRes.ok) {
         serverConfig = await configRes.json();
         authEnabled = Boolean(serverConfig.authEnabled && serverConfig.firebase);
-        if (serverConfig.provider === 'openrouter') {
+        if (serverConfig.provider !== 'ollama') {
           localStorage.removeItem('ollama_model');
           localStorage.removeItem('ollama_host');
         }

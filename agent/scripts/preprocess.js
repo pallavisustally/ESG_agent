@@ -5,6 +5,7 @@ import { XMLParser } from 'fast-xml-parser';
 import dotenv from 'dotenv';
 import { getDb, insertReport, deleteReport } from '../src/db.js';
 import { resolveXbrlDir } from '../src/paths.js';
+import { coerceMetricNumber, coerceMetricUnit } from '../src/metric-coerce.js';
 
 dotenv.config();
 
@@ -120,16 +121,15 @@ export function normalizeReport(parsedXml, filePath = '') {
       if (node === undefined || node === null) return null;
       if (typeof node === 'object') {
         const textVal = node['#text'] !== undefined ? node['#text'] : '';
-        const numVal = Number(textVal);
+        const unitAttr = node['@_unit'] || node['@_unitRef'] || '';
         return {
-          value: isNaN(numVal) ? textVal : numVal,
-          unit: node['@_unit'] || ''
+          value: coerceMetricNumber(textVal),
+          unit: coerceMetricUnit(textVal, unitAttr),
         };
       }
-      const numVal = Number(node);
       return {
-        value: isNaN(numVal) ? node : numVal,
-        unit: ''
+        value: coerceMetricNumber(node),
+        unit: coerceMetricUnit(node, ''),
       };
     };
 
@@ -178,15 +178,35 @@ export function normalizeReport(parsedXml, filePath = '') {
   const previousYear = endPY ? new Date(endPY).getFullYear() : 2025;
 
   const getMetricVal = (key, context) => {
-    const match = leaves.find(el => el.path.includes(key) && el.context === context);
-    if (match && match.val !== undefined && match.val !== null && match.val !== '') {
-      const num = Number(match.val);
-      return {
-        value: isNaN(num) ? match.val : num,
-        unit: match.unit || ''
-      };
+    const candidates = leaves.filter(
+      (el) => el.path.includes(key) && el.context === context
+        && el.val !== undefined && el.val !== null && el.val !== '',
+    );
+    if (!candidates.length) return null;
+
+    // Prefer a leaf that actually contains a number (BRSR often has a separate unit-label node).
+    const match =
+      candidates.find((el) => coerceMetricNumber(el.val) != null)
+      || candidates[0];
+
+    const value = coerceMetricNumber(match.val);
+    if (value == null) return null;
+
+    let unit = coerceMetricUnit(match.val, match.unit || '');
+    if (!unit) {
+      for (const el of candidates) {
+        if (el === match) continue;
+        // Unit-only sibling leaf
+        if (coerceMetricNumber(el.val) == null) {
+          const u = coerceMetricUnit(el.val, el.unit || '');
+          if (u) {
+            unit = u;
+            break;
+          }
+        }
+      }
     }
-    return null;
+    return { value, unit: unit || '' };
   };
 
   const resolveYearData = (year, context, filingDate) => {
@@ -266,15 +286,20 @@ export function normalizeReport(parsedXml, filePath = '') {
     // Demographics & Diversity
     // Prefer BRSR Section A headcount (permanent + other-than-permanent employees).
     // Do NOT use union-membership / performance-coverage totals — those inflate or distort shares.
+    // Male headcount uses the same Table A gender contexts (D_Male_*).
     const isCurrentYear = context === 'DCYMain';
     const headcountTotalCtx = isCurrentYear ? 'D_Gender_Employees_TableA' : null;
     const headcountFemaleCtx = isCurrentYear ? 'D_Female_Employees_TableA' : null;
+    const headcountMaleCtx = isCurrentYear ? 'D_Male_Employees_TableA' : null;
     const permTotalCtx = isCurrentYear ? 'D_Gender_PermanentEmployees_TableA' : 'D_Gender_PermanentEmployees_PY';
     const permFemaleCtx = isCurrentYear ? 'D_Female_PermanentEmployees_TableA' : 'D_Female_PermanentEmployees_PY';
+    const permMaleCtx = isCurrentYear ? 'D_Male_PermanentEmployees_TableA' : 'D_Male_PermanentEmployees_PY';
     const otpTotalCtx = isCurrentYear ? 'D_Gender_OtherThanPermanentEmployees_TableA' : null;
     const otpFemaleCtx = isCurrentYear ? 'D_Female_OtherThanPermanentEmployees_TableA' : null;
+    const otpMaleCtx = isCurrentYear ? 'D_Male_OtherThanPermanentEmployees_TableA' : null;
     const legacyTotalCtx = isCurrentYear ? 'D_Gender_PermanentEmployees' : 'D_Gender_PermanentEmployees_PY';
     const legacyFemaleCtx = isCurrentYear ? 'D_Female_PermanentEmployees' : 'D_Female_PermanentEmployees_PY';
+    const legacyMaleCtx = isCurrentYear ? 'D_Male_PermanentEmployees' : 'D_Male_PermanentEmployees_PY';
 
     let totalEmp = headcountTotalCtx
       ? getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', headcountTotalCtx)
@@ -282,16 +307,28 @@ export function normalizeReport(parsedXml, filePath = '') {
     let femaleEmp2 = headcountFemaleCtx
       ? getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', headcountFemaleCtx)
       : null;
+    let maleEmp2 = headcountMaleCtx
+      ? getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', headcountMaleCtx)
+      : null;
 
     // Fallback: permanent + other-than-permanent headcount rows
-    if ((!totalEmp || !femaleEmp2) && isCurrentYear) {
+    if ((!totalEmp || !femaleEmp2 || !maleEmp2) && isCurrentYear) {
       const permTotal = getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', permTotalCtx);
       const permFemale = getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', permFemaleCtx);
+      const permMale = getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', permMaleCtx);
       const otpTotal = getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', otpTotalCtx);
       const otpFemale = getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', otpFemaleCtx);
-      if (permTotal?.value > 0 && permFemale) {
-        totalEmp = { value: permTotal.value + (otpTotal?.value || 0), unit: permTotal.unit || '' };
-        femaleEmp2 = { value: permFemale.value + (otpFemale?.value || 0), unit: permFemale.unit || '' };
+      const otpMale = getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', otpMaleCtx);
+      if (permTotal?.value > 0 && (permFemale || permMale)) {
+        if (!totalEmp) {
+          totalEmp = { value: permTotal.value + (otpTotal?.value || 0), unit: permTotal.unit || '' };
+        }
+        if (!femaleEmp2 && permFemale) {
+          femaleEmp2 = { value: permFemale.value + (otpFemale?.value || 0), unit: permFemale.unit || '' };
+        }
+        if (!maleEmp2 && permMale) {
+          maleEmp2 = { value: permMale.value + (otpMale?.value || 0), unit: permMale.unit || '' };
+        }
       }
     }
 
@@ -302,21 +339,29 @@ export function normalizeReport(parsedXml, filePath = '') {
         || getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', permTotalCtx);
       femaleEmp2 = getMetricVal('TotalNumberOfEmployeesOrWorkersForMembership', legacyFemaleCtx)
         || getMetricVal('TotalNumberOfEmployeesOrWorkersForPerformanceAndCareerDevelopment', legacyFemaleCtx)
-        || getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', permFemaleCtx);
+        || getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', permFemaleCtx)
+        || femaleEmp2;
+      maleEmp2 = getMetricVal('TotalNumberOfEmployeesOrWorkersForMembership', legacyMaleCtx)
+        || getMetricVal('TotalNumberOfEmployeesOrWorkersForPerformanceAndCareerDevelopment', legacyMaleCtx)
+        || getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', permMaleCtx)
+        || maleEmp2;
 
       // Reject clearly broken PY gender splits (e.g. female≈total while male is 0).
-      const legacyMaleCtx = isCurrentYear ? 'D_Male_PermanentEmployees' : 'D_Male_PermanentEmployees_PY';
-      const maleEmp = getMetricVal('TotalNumberOfEmployeesOrWorkersForMembership', legacyMaleCtx)
-        || getMetricVal('TotalNumberOfEmployeesOrWorkersForPerformanceAndCareerDevelopment', legacyMaleCtx);
       if (
         totalEmp?.value > 50
         && femaleEmp2
         && (femaleEmp2.value / totalEmp.value) > 0.9
-        && (!maleEmp || maleEmp.value === 0)
+        && (!maleEmp2 || maleEmp2.value === 0)
       ) {
         totalEmp = null;
         femaleEmp2 = null;
+        maleEmp2 = null;
       }
+    } else if (!maleEmp2) {
+      // Prefer explicit male from legacy permanent contexts when Table A total/female already resolved.
+      maleEmp2 = getMetricVal('NumberOfEmployeesOrWorkersIncludingDifferentlyAbled', permMaleCtx)
+        || getMetricVal('TotalNumberOfEmployeesOrWorkersForMembership', legacyMaleCtx)
+        || getMetricVal('TotalNumberOfEmployeesOrWorkersForPerformanceAndCareerDevelopment', legacyMaleCtx);
     }
 
     if (totalEmp && totalEmp.value > 0) {
@@ -325,10 +370,43 @@ export function normalizeReport(parsedXml, filePath = '') {
         metrics.female_employee_count = femaleEmp2.value;
         metrics.female_employee_share = Math.round((femaleEmp2.value / totalEmp.value) * 10000) / 100;
       }
+      if (maleEmp2 && maleEmp2.value >= 0) {
+        metrics.male_employee_count = maleEmp2.value;
+        metrics.male_employee_share = Math.round((maleEmp2.value / totalEmp.value) * 10000) / 100;
+      }
     } else {
       const femEmp = getMetricVal('AverageNumberOfFemaleEmployeesOrWorkersAtTheBeginningOfTheYearAndAsAtEndOfTheYear', context);
       if (femEmp) {
         metrics.female_employee_count = femEmp.value;
+      }
+    }
+
+    // Safe residual derivation when XBRL omits male but total + female are present.
+    // Valid for BRSR Section A two-way gender tables (Male + Female = Total).
+    // Skip when residual would be negative (data error) or when explicit male already set.
+    if (
+      metrics.male_employee_count == null
+      && metrics.total_employee_count != null
+      && metrics.female_employee_count != null
+      && metrics.total_employee_count >= metrics.female_employee_count
+    ) {
+      const derivedMale = Math.round(
+        (Number(metrics.total_employee_count) - Number(metrics.female_employee_count)) * 100,
+      ) / 100;
+      if (derivedMale >= 0) {
+        metrics.male_employee_count = derivedMale;
+        if (metrics.total_employee_count > 0) {
+          metrics.male_employee_share = Math.round((derivedMale / metrics.total_employee_count) * 10000) / 100;
+        }
+      }
+    }
+    if (
+      metrics.male_employee_share == null
+      && metrics.female_employee_share != null
+    ) {
+      const derivedShare = Math.round((100 - Number(metrics.female_employee_share)) * 100) / 100;
+      if (derivedShare >= 0 && derivedShare <= 100) {
+        metrics.male_employee_share = derivedShare;
       }
     }
 

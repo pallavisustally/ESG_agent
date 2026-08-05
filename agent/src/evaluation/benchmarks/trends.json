@@ -1,0 +1,44 @@
+[
+  {
+    "id": "trends-infosys-scope1-over-years",
+    "category": "trends",
+    "tier": "smoke",
+    "question": "Show Infosys Scope 1 emissions trend over the years",
+    "expected": {
+      "intent": "TREND_ANALYSIS",
+      "entities": ["Infosys"],
+      "metric": "scope1_emissions",
+      "executionStrategy": "analytics",
+      "engines": ["analytics"]
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": false }
+  },
+  {
+    "id": "trends-chart-renewable",
+    "category": "trends",
+    "tier": "smoke",
+    "question": "Chart TCS renewable energy share trend",
+    "expected": {
+      "entities": ["TCS"],
+      "metric": "renewable_energy_share",
+      "executionStrategy": "analytics",
+      "engines": ["analytics"],
+      "chart": { "required": true }
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": false, "chart": true }
+  },
+  {
+    "id": "trends-yoy-emissions",
+    "category": "trends",
+    "tier": "full",
+    "question": "How did Infosys Scope 1 emissions change year over year?",
+    "expected": {
+      "entities": ["Infosys"],
+      "metric": "scope1_emissions",
+      "executionStrategy": "analytics",
+      "engines": ["analytics"],
+      "answerValidation": "PASS_OR_WARNING"
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": false, "numeric": true }
+  }
+]

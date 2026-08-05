@@ -714,6 +714,20 @@ html, body {
   color: var(--text-secondary);
 }
 
+.chart-subtitle {
+  font-size: 12px;
+  margin: -8px 0 12px;
+  color: var(--text-muted, var(--text-secondary));
+  opacity: 0.85;
+}
+
+.chart-meta {
+  font-size: 11px;
+  margin-top: 8px;
+  color: var(--text-muted, var(--text-secondary));
+  opacity: 0.75;
+}
+
 .chart-canvas-wrapper { position: relative; height: 280px; }
 .chart-canvas-wrapper.pie-chart { height: 300px; max-width: 420px; margin: 0 auto; }
 

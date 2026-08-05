@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gates:
+    name: Unit + evaluation gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit + regression tests (includes smoke ≥95%)
+        run: npm test
+
+      - name: Smoke evaluation gate (plan mode, 100%)
+        run: npm run evaluate:smoke
+
+      - name: Plan CI evaluation gate (all cases, ≥95%)
+        run: npm run evaluate:ci
+
+      - name: Category summary (recommendation, charts, memory, …)
+        run: |
+          npm run ci:summary | tee /tmp/ci-summary.md
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+            cat /tmp/ci-summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload evaluation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evaluation-reports
+          path: data/evaluation_reports/
+          if-no-files-found: ignore
+
+  # Optional — only runs when repo variable EVAL_PIPELINE_GATE=true
+  pipeline-eval:
+    name: Pipeline evaluation (optional)
+    if: ${{ vars.EVAL_PIPELINE_GATE == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: quality-gates
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Pipeline full evaluation
+        env:
+          EVAL_PIPELINE_GATE: 'true'
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          ALLOW_SQLITE_FALLBACK: 'true'
+        run: npm run evaluate:pipeline
+
+      - name: Upload pipeline evaluation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evaluation-reports-pipeline
+          path: data/evaluation_reports/
+          if-no-files-found: ignore
+
+  # Marker job: green only when quality-gates pass.
+  # Configure Vercel / branch protection to require check name:
+  #   "Deploy gate (quality gates passed)"
+  deploy-gate:
+    name: Deploy gate (quality gates passed)
+    runs-on: ubuntu-latest
+    needs: quality-gates
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    steps:
+      - name: Quality gates cleared for deploy
+        run: |
+          echo "All merge-blocking quality gates passed."
+          echo "Safe to deploy this revision (configure platform to require this check)."

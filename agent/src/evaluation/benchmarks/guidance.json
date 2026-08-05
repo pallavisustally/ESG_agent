@@ -1,0 +1,38 @@
+[
+  {
+    "id": "guidance-reduce-emissions",
+    "category": "guidance",
+    "tier": "smoke",
+    "question": "How can I reduce carbon emissions?",
+    "expected": {
+      "intent": "HOW_TO",
+      "executionStrategy": "guidance",
+      "engines": ["guidance"]
+    },
+    "score": { "routing": true, "entity": false, "metric": false, "year": false }
+  },
+  {
+    "id": "guidance-reduce-water",
+    "category": "guidance",
+    "tier": "smoke",
+    "question": "How can I reduce water consumption?",
+    "expected": {
+      "intent": "HOW_TO",
+      "executionStrategy": "guidance",
+      "engines": ["guidance"]
+    },
+    "score": { "routing": true, "entity": false, "metric": false, "year": false }
+  },
+  {
+    "id": "guidance-circular-economy",
+    "category": "guidance",
+    "tier": "smoke",
+    "question": "How to reduce waste with circular economy?",
+    "expected": {
+      "intent": "HOW_TO",
+      "executionStrategy": "guidance",
+      "engines": ["guidance"]
+    },
+    "score": { "routing": true, "entity": false, "metric": false, "year": false }
+  }
+]

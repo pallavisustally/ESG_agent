@@ -1,0 +1,63 @@
+[
+  {
+    "id": "memory-above-companies-scope1",
+    "category": "conversation-memory",
+    "tier": "smoke",
+    "question": "Scope 1 for those companies",
+    "memory": {
+      "lastIntent": "COMPARE_COMPANIES",
+      "lastCompanies": ["Infosys Limited", "Tata Consultancy Services Limited"],
+      "lastMetric": "scope1_emissions",
+      "lastYear": 2024,
+      "comparisonContext": {
+        "companies": ["Infosys Limited", "Tata Consultancy Services Limited"],
+        "metric": "scope1_emissions",
+        "year": 2024
+      }
+    },
+    "expected": {
+      "entities": ["Infosys Limited", "Tata Consultancy Services Limited"],
+      "metric": "scope1_emissions",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"]
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": true }
+  },
+  {
+    "id": "memory-above-without-context-clarifies",
+    "category": "conversation-memory",
+    "tier": "smoke",
+    "question": "male employees in the above companies",
+    "memory": null,
+    "expected": {
+      "executionStrategy": "clarify"
+    },
+    "score": { "routing": true, "entity": false, "metric": false, "year": false }
+  },
+  {
+    "id": "memory-same-year-follow",
+    "category": "conversation-memory",
+    "tier": "smoke",
+    "question": "same for renewable energy share",
+    "memory": {
+      "lastIntent": "COMPARE_COMPANIES",
+      "lastCompanies": ["Infosys Limited", "Wipro Limited"],
+      "lastMetric": "scope1_emissions",
+      "lastYear": 2024,
+      "comparisonContext": {
+        "companies": ["Infosys Limited", "Wipro Limited"],
+        "metric": "scope1_emissions",
+        "year": 2024
+      }
+    },
+    "expected": {
+      "entities": ["Infosys Limited", "Wipro Limited"],
+      "metric": "renewable_energy_share",
+      "year": 2024,
+      "executionStrategy": "analytics",
+      "engines": ["analytics"]
+    },
+    "score": { "routing": true, "entity": true, "metric": true, "year": true }
+  }
+]

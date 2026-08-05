@@ -6,6 +6,8 @@
  * After migrating to Neon, top-N rankings were returning null-share rows.
  */
 
+import { rewriteAliasedSqlColumns, normalizeMetricQueryText } from './metric-aliases.js';
+
 /** Columns the agent may SELECT / filter / ORDER BY on `reports`. */
 export const REPORTS_COLUMNS = new Set([
   'id',
@@ -40,6 +42,8 @@ export const REPORTS_COLUMNS = new Set([
   'female_employee_count',
   'total_employee_count',
   'female_employee_share',
+  'male_employee_count',
+  'male_employee_share',
   'female_board_count',
   'total_board_count',
   'female_board_share',
@@ -73,6 +77,8 @@ export const RANKABLE_METRICS = new Set([
   'female_employee_count',
   'total_employee_count',
   'female_employee_share',
+  'male_employee_count',
+  'male_employee_share',
   'female_board_count',
   'total_board_count',
   'female_board_share',
@@ -116,11 +122,13 @@ export function findUnknownSqlColumns(query) {
   sql = sql.replace(/'(?:''|[^'])*'/g, "''");
   sql = sql.replace(/"(?:""|[^"])*"/g, '""');
   sql = sql.replace(/\b\d+(?:\.\d+)?\b/g, '0');
+  // SELECT ... AS total_ghg_emissions is an output alias, not a schema column.
+  sql = sql.replace(/\bas\s+[a-z_][a-z0-9_]*/gi, 'AS _out_alias');
 
   const unknown = new Set();
   for (const match of sql.matchAll(/\b([a-z_][a-z0-9_]*)\b/gi)) {
     const token = match[1].toLowerCase();
-    if (SQL_NOISE_TOKENS.has(token)) continue;
+    if (SQL_NOISE_TOKENS.has(token) || token === '_out_alias') continue;
     if (REPORTS_COLUMNS.has(token)) continue;
     // Prefer metric-style names; plain words are often aliases or LIKE remnants.
     if (!token.includes('_') && !/^scope\d/.test(token)) continue;
@@ -131,12 +139,14 @@ export function findUnknownSqlColumns(query) {
 
 const SHARE_METRICS = new Set([
   'female_employee_share',
+  'male_employee_share',
   'female_board_share',
   'renewable_energy_share',
 ]);
 
 const SHARE_DENOMINATOR = {
   female_employee_share: 'total_employee_count',
+  male_employee_share: 'total_employee_count',
   female_board_share: 'total_board_count',
 };
 
@@ -210,7 +220,9 @@ export function detectFemaleShareRankingIntent(userMessage = '') {
  * @returns {{ sql: string, orderColumn: string|null, orderDir: 'ASC'|'DESC'|null, limit: number|null }}
  */
 export function sanitizeMetricOrderQuery(query, { postgres = false, userMessage = '' } = {}) {
-  let sql = alignRankingQueryWithQuestion(query, userMessage);
+  let sql = rewriteAliasedSqlColumns(query, userMessage);
+  sql = alignRankingQueryWithQuestion(sql, userMessage);
+  sql = ensurePositiveEmissionsSqlFilter(sql, userMessage);
   if (!sql) return { sql, orderColumn: null, orderDir: null, limit: null };
 
   const limitMatch = sql.match(/\blimit\s+(\d+)\b/i);
@@ -219,7 +231,10 @@ export function sanitizeMetricOrderQuery(query, { postgres = false, userMessage 
   const orderMatch = sql.match(
     /\border\s+by\s+(?:reports\.)?([a-z_][a-z0-9_]*)\s*(asc|desc)?(?:\s+nulls\s+(first|last))?/i,
   );
-  if (!orderMatch) return { sql, orderColumn: null, orderDir: null, limit };
+  if (!orderMatch) {
+    // Still return limit so callers can slice; emissions filter already applied above.
+    return { sql, orderColumn: null, orderDir: null, limit };
+  }
 
   const orderColumn = orderMatch[1].toLowerCase();
   const orderDir = (orderMatch[2] || 'ASC').toUpperCase();
@@ -353,4 +368,95 @@ export function rankingLooksInvalid(rows, orderColumn, { minRows = 1 } = {}) {
   if (rows.length < minRows) return true;
   const positive = rows.filter((r) => Number(r?.[orderColumn]) > 0);
   return positive.length < Math.min(minRows, 3);
+}
+
+const SCOPE_EMISSION_COLS = ['scope1_emissions', 'scope2_emissions', 'scope3_emissions'];
+
+/** True when the question is about carbon/GHG/scope emissions (not intensity-only). */
+export function detectEmissionsDataIntent(userMessage = '') {
+  const q = normalizeMetricQueryText(String(userMessage || '').toLowerCase());
+  if (!q.trim()) return false;
+  // Intensity-only questions use emissions_intensity, not scope totals.
+  const isIntensity =
+    /\b(carbon|ghg|greenhouse)\s+emissions?\s+intensity\b/.test(q)
+    || /\b(carbon|ghg|greenhouse|emission)s?\s+intensity\b/.test(q)
+    || /\bintensity\s+of\s+(carbon|ghg|emission)s?\b/.test(q);
+  if (isIntensity && !/\bscope\s*[-]?\s*[123]\b/.test(q)) {
+    return false;
+  }
+  return (
+    /\b(carbon|ghg|greenhouse)\b/.test(q)
+    || /\bscope\s*[-]?\s*[123]\b/.test(q)
+    || /\bscope[123]_emissions\b/.test(q)
+    || /\btco2e?\b/.test(q)
+  );
+}
+
+function rowHasPositiveEmissions(row) {
+  if (!row || typeof row !== 'object') return false;
+  return SCOPE_EMISSION_COLS.some((col) => {
+    const n = Number(row[col]);
+    return Number.isFinite(n) && n > 0;
+  });
+}
+
+/**
+ * Drop companies whose Scope 1/2/3 are all null/zero (common junk for carbon overviews).
+ */
+export function filterZeroEmissionRows(rows) {
+  if (!Array.isArray(rows) || !rows.length) return rows;
+  const hasScopeCols = rows.some((r) => SCOPE_EMISSION_COLS.some((c) => c in (r || {})));
+  if (!hasScopeCols) return rows;
+  return rows.filter((row) => {
+    if (isUnknownCompany(row?.company)) return false;
+    return rowHasPositiveEmissions(row);
+  });
+}
+
+/**
+ * When SQL mentions scope emissions but has no positive-emissions filter, require total GHG > 0.
+ */
+export function ensurePositiveEmissionsSqlFilter(sql = '', userMessage = '') {
+  let out = String(sql || '').trim().replace(/;+\s*$/, '');
+  if (!out) return out;
+  if (!detectEmissionsDataIntent(userMessage) && !/scope[123]_emissions/i.test(out)) {
+    return out;
+  }
+  if (!/scope[123]_emissions/i.test(out)) return out;
+
+  const totalExpr =
+    '(COALESCE(scope1_emissions,0)+COALESCE(scope2_emissions,0)+COALESCE(scope3_emissions,0))';
+  if (new RegExp(`${totalExpr.replace(/[()]/g, '\\$&')}\\s*>\\s*0`, 'i').test(out)) {
+    return out;
+  }
+  // Already has an explicit positive filter on at least one scope.
+  if (/scope[123]_emissions\s*>\s*0/i.test(out)) return out;
+
+  return injectWhereFilters(out, [`${totalExpr} > 0`]);
+}
+
+/**
+ * Fallback when a carbon/GHG overview returns only zeros/nulls.
+ */
+export function buildCarbonEmissionsOverviewSql(year, limit = 10) {
+  const y = Number(year);
+  const lim = Math.max(1, Number(limit) || 10);
+  if (!Number.isFinite(y)) return null;
+  const totalExpr =
+    '(COALESCE(scope1_emissions,0)+COALESCE(scope2_emissions,0)+COALESCE(scope3_emissions,0))';
+  return `
+    SELECT company, year, sector, industry,
+           scope1_emissions, scope1_unit, scope2_emissions, scope2_unit, scope3_emissions, scope3_unit,
+           ${totalExpr} AS total_ghg_emissions
+    FROM reports
+    WHERE year = ${y}
+      AND ${totalExpr} > 0
+      AND COALESCE(scope1_emissions,0) < 2000000000
+      AND COALESCE(scope2_emissions,0) < 2000000000
+      AND COALESCE(scope3_emissions,0) < 2000000000
+      AND company IS NOT NULL
+      AND lower(company) NOT LIKE '%unknown%'
+    ORDER BY total_ghg_emissions DESC NULLS LAST
+    LIMIT ${Math.max(lim * 12, 80)}
+  `.replace(/\s+/g, ' ').trim();
 }

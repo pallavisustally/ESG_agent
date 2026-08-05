@@ -1,0 +1,46 @@
+[
+  {
+    "id": "knowledge-what-is-esg",
+    "category": "knowledge",
+    "tier": "smoke",
+    "question": "What is ESG?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": ["knowledge"]
+    },
+    "score": { "routing": true, "entity": false, "metric": false, "year": false }
+  },
+  {
+    "id": "knowledge-what-is-scope1",
+    "category": "knowledge",
+    "tier": "smoke",
+    "question": "What is Scope 1?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": ["knowledge"]
+    },
+    "score": { "routing": true, "entity": false, "metric": false, "year": false }
+  },
+  {
+    "id": "knowledge-what-is-brsr",
+    "category": "knowledge",
+    "tier": "smoke",
+    "question": "What is BRSR?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": ["knowledge"]
+    },
+    "score": { "routing": true, "entity": false, "metric": false, "year": false }
+  },
+  {
+    "id": "knowledge-net-zero",
+    "category": "knowledge",
+    "tier": "smoke",
+    "question": "What is Net Zero?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": ["knowledge"]
+    },
+    "score": { "routing": true, "entity": false, "metric": false, "year": false }
+  }
+]

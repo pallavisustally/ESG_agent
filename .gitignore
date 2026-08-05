@@ -28,9 +28,11 @@ pnpm-debug.log*
 data/xbrl/
 data/pdf/
 data/chats.json
+data/metric_alias_events.jsonl
 data/citation_tests/
 data/model_comparisons/
 data/pdf_cache/
+data/evaluation_reports/
 data/model_evaluation_responses_*.json
 data/*results.json
 data/*report*.json
@@ -45,3 +47,5 @@ data/*summary*.md
 dist/
 build/
 coverage/
+docs/Sustally_AI_Agent_Project_Documentation.html
+docs/Sustally_AI_Agent_Project_Documentation.pdf

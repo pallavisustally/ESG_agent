@@ -12,19 +12,17 @@
     "upload:hf": "node agent/scripts/upload_pdfs_to_hf.js",
     "install-browser": "npx puppeteer browsers install chrome",
     "report-counts": "node agent/scripts/report_counts.js",
-    "evaluate": "node agent/scripts/evaluate_agent.js",
-    "evaluate:top15": "node agent/scripts/top15_important_questions.js",
-    "evaluate:top15:run": "node agent/scripts/top15_important_questions.js --run",
-    "evaluate:judge": "node agent/scripts/evaluate_with_judge.js",
-    "compare:models": "node agent/scripts/compare_models.js",
-    "compare:gpt-deepseek": "node agent/scripts/compare_gpt_deepseek.js --fast",
-    "test:citations": "node agent/scripts/test_citations.js",
-    "test:all": "node agent/scripts/run_all_tests.js",
-    "test:all:quick": "node agent/scripts/run_all_tests.js --quick",
-    "verify:pdf-sources": "node agent/scripts/verify_pdf_sources.js",
     "dev": "node agent/src/server.js",
     "ui": "node agent/src/server.js",
-    "start": "node agent/src/server.js"
+    "start": "node agent/src/server.js",
+    "test": "node --test agent/src/intent/metric-resolution.test.js agent/src/intent/pending-request.test.js agent/src/intent/informational-howto.test.js agent/src/intent/entity-precedence.test.js agent/src/intent/query-type-order.test.js agent/src/pipeline/sql-document-fallback.test.js agent/src/validation/plan-validator.test.js agent/src/validation/response-validator.test.js agent/src/validation/answer-validator.test.js agent/src/validation/semantic-plan.test.js agent/src/retrieval/confidence-retrieval.test.js agent/src/router/tool-router.test.js agent/src/observability/execution-trace.test.js agent/src/regression/regression-suite.test.js agent/src/capability/capability-planner.test.js agent/src/report-sources-pdf.test.js agent/src/answers/response-media.test.js agent/src/visualization/visualization-planner.test.js agent/src/visualization/visualization-engine.test.js agent/src/sql-agent/sector-aggregate.test.js agent/src/execution/execution-plan.test.js agent/src/execution/execution-planner.test.js agent/src/execution/execution-orchestrator.test.js agent/src/evaluation/evaluation-smoke.test.js agent/src/cache/company-cache.test.js agent/src/capability/recommendation-engine.test.js agent/src/knowledge/framework-registry.test.js agent/src/evaluation/quality-gates.test.js",
+    "evaluate:smoke": "node agent/scripts/evaluate.js --gate smoke",
+    "evaluate:ci": "node agent/scripts/evaluate.js --gate plan-ci",
+    "evaluate:pipeline": "node agent/scripts/evaluate.js --gate pipeline --write",
+    "evaluate": "node agent/scripts/evaluate.js --tier full --mode pipeline --write",
+    "evaluate:report": "node agent/scripts/evaluate.js --gate smoke --write",
+    "ci": "node agent/scripts/ci.js",
+    "ci:summary": "node agent/scripts/ci-summary.js --gate plan-ci --write"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1085.0",
@@ -45,5 +43,8 @@
   },
   "overrides": {
     "jose": "5.9.6"
+  },
+  "optionalDependencies": {
+    "@langchain/langgraph": "^1.4.8"
   }
 }
