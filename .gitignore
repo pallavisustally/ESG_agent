@@ -39,9 +39,10 @@ data/*report*.json
 data/*report*.md
 data/*summary*.md
 
-# Generated markdown artifacts
+# Generated markdown artifacts (allow tracked ops docs)
 *.md
 !README.md
+!docs/*.md
 
 # Optional local module/build outputs
 dist/

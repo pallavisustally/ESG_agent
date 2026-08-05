@@ -1,0 +1,84 @@
+[
+  {
+    "id": "conv-1",
+    "scenario": "conversation",
+    "question": "What are Infosys Scope 1 emissions in 2024?",
+    "chatHistory": []
+  },
+  {
+    "id": "conv-2",
+    "scenario": "conversation",
+    "question": "And Scope 2?",
+    "chatHistory": [
+      { "role": "user", "content": "What are Infosys Scope 1 emissions in 2024?" },
+      { "role": "assistant", "content": "Infosys Scope 1 for 2024 was reported in BRSR." }
+    ],
+    "memory": {
+      "lastEntities": ["Infosys"],
+      "lastYear": 2024,
+      "lastMetric": "scope1_emissions"
+    }
+  },
+  {
+    "id": "conv-3",
+    "scenario": "conversation",
+    "question": "Compare with Wipro",
+    "chatHistory": [
+      { "role": "user", "content": "What are Infosys Scope 1 emissions in 2024?" },
+      { "role": "assistant", "content": "Infosys Scope 1…" },
+      { "role": "user", "content": "And Scope 2?" },
+      { "role": "assistant", "content": "Infosys Scope 2…" }
+    ],
+    "memory": {
+      "lastEntities": ["Infosys"],
+      "lastYear": 2024,
+      "lastMetric": "scope2_emissions"
+    }
+  },
+  {
+    "id": "conv-4",
+    "scenario": "conversation",
+    "question": "Show the trend for the same company",
+    "memory": {
+      "lastEntities": ["Infosys"],
+      "lastMetric": "scope1_emissions"
+    }
+  },
+  {
+    "id": "conv-5",
+    "scenario": "conversation",
+    "question": "How can they improve?",
+    "memory": {
+      "lastEntities": ["Infosys"],
+      "lastMetric": "scope1_emissions",
+      "lastYear": 2024
+    }
+  },
+  {
+    "id": "conv-6",
+    "scenario": "conversation",
+    "question": "What about water consumption?",
+    "memory": {
+      "lastEntities": ["Infosys"]
+    }
+  },
+  {
+    "id": "conv-7",
+    "scenario": "conversation",
+    "question": "And the previous year?",
+    "memory": {
+      "lastEntities": ["Infosys"],
+      "lastMetric": "water_consumption",
+      "lastYear": 2024
+    }
+  },
+  {
+    "id": "conv-8",
+    "scenario": "conversation",
+    "question": "Recommend improvements on that metric",
+    "memory": {
+      "lastEntities": ["Infosys"],
+      "lastMetric": "water_consumption"
+    }
+  }
+]

@@ -36,6 +36,7 @@ import {
 } from '../observability/engine-timing.js';
 import { ERROR_CODES } from '../errors/agent-errors.js';
 import { logPipelineStage } from '../observability/agent-logger.js';
+import { shouldOmitFromComposition } from '../ops/soft-fail.js';
 
 const DEFAULT_ENGINE_TIMEOUT_MS = Number(process.env.EXECUTION_ENGINE_TIMEOUT_MS || 45000);
 
@@ -204,11 +205,22 @@ export async function executeExecutionPlan(ctx = {}) {
       'recommendation',
       idx,
     );
-    results.push(rec);
+    // Recommendation must never block analytics/report answers.
+    if (rec?.ok && String(rec.text || '').trim()) {
+      results.push(rec);
+    } else if (rec) {
+      results.push({
+        ...rec,
+        ok: false,
+        text: '',
+        recommendations: '',
+        softOmitted: true,
+      });
+    }
   }
 
   const executeMs = executeStarted();
-  const usable = results.filter((r) => r && (r.text || r.visualization) && r.error !== 'analytics_not_required' && r.error !== 'report_not_required' && r.error !== 'knowledge_not_required' && r.error !== 'guidance_not_required' && r.error !== 'compliance_not_required' && r.error !== 'recommendation_not_required' && r.error !== 'document_not_required');
+  const usable = results.filter((r) => !shouldOmitFromComposition(r));
 
   // Map engine results → capability-shaped results for existing composer
   const capabilityResults = usable.map((r) => ({
@@ -387,8 +399,17 @@ async function runEngineWithTimeout(engine, shared, timeoutMs, phase = 'sequenti
     tool: engine,
     message: `Running ${engine}…`,
   });
+
+  const abortController = new AbortController();
+  const onParentAbort = () => abortController.abort();
+  if (shared.signal) {
+    if (shared.signal.aborted) abortController.abort();
+    else shared.signal.addEventListener('abort', onParentAbort, { once: true });
+  }
+  const engineShared = { ...shared, signal: abortController.signal };
+
   try {
-    const result = await withTimeout(runner(shared), timeoutMs, engine);
+    const result = await withTimeout(runner(engineShared), timeoutMs, engine, abortController);
     shared.onProgress?.({
       status: 'tool_end',
       tool: engine,
@@ -427,19 +448,26 @@ async function runEngineWithTimeout(engine, shared, timeoutMs, phase = 'sequenti
       intent: shared.classification?.intent,
       records: shared.engineOrder,
     });
+    // Empty text — soft engines are omitted from composition; hard engines
+    // can still surface a short safe line via their own catch paths.
     return createEngineResponse({
       engine,
       ok: false,
-      text: `${engine} timed out or failed: ${error}`,
+      text: '',
       error,
     });
+  } finally {
+    shared.signal?.removeEventListener?.('abort', onParentAbort);
   }
 }
 
-function withTimeout(promise, ms, label) {
+function withTimeout(promise, ms, label, abortController = null) {
   if (!ms || ms <= 0) return promise;
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label}_timeout_${ms}ms`)), ms);
+    const timer = setTimeout(() => {
+      try { abortController?.abort(); } catch { /* ignore */ }
+      reject(new Error(`${label}_timeout_${ms}ms`));
+    }, ms);
     promise.then(
       (v) => { clearTimeout(timer); resolve(v); },
       (e) => { clearTimeout(timer); reject(e); },

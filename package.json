@@ -15,14 +15,19 @@
     "dev": "node agent/src/server.js",
     "ui": "node agent/src/server.js",
     "start": "node agent/src/server.js",
-    "test": "node --test agent/src/intent/metric-resolution.test.js agent/src/intent/pending-request.test.js agent/src/intent/informational-howto.test.js agent/src/intent/entity-precedence.test.js agent/src/intent/query-type-order.test.js agent/src/pipeline/sql-document-fallback.test.js agent/src/validation/plan-validator.test.js agent/src/validation/response-validator.test.js agent/src/validation/answer-validator.test.js agent/src/validation/semantic-plan.test.js agent/src/retrieval/confidence-retrieval.test.js agent/src/router/tool-router.test.js agent/src/observability/execution-trace.test.js agent/src/regression/regression-suite.test.js agent/src/capability/capability-planner.test.js agent/src/report-sources-pdf.test.js agent/src/answers/response-media.test.js agent/src/visualization/visualization-planner.test.js agent/src/visualization/visualization-engine.test.js agent/src/sql-agent/sector-aggregate.test.js agent/src/execution/execution-plan.test.js agent/src/execution/execution-planner.test.js agent/src/execution/execution-orchestrator.test.js agent/src/evaluation/evaluation-smoke.test.js agent/src/cache/company-cache.test.js agent/src/capability/recommendation-engine.test.js agent/src/knowledge/framework-registry.test.js agent/src/evaluation/quality-gates.test.js",
+    "test": "node --test agent/src/intent/metric-resolution.test.js agent/src/intent/pending-request.test.js agent/src/intent/informational-howto.test.js agent/src/intent/entity-precedence.test.js agent/src/intent/query-type-order.test.js agent/src/pipeline/sql-document-fallback.test.js agent/src/validation/plan-validator.test.js agent/src/validation/response-validator.test.js agent/src/validation/answer-validator.test.js agent/src/validation/semantic-plan.test.js agent/src/retrieval/confidence-retrieval.test.js agent/src/router/tool-router.test.js agent/src/observability/execution-trace.test.js agent/src/regression/regression-suite.test.js agent/src/capability/capability-planner.test.js agent/src/report-sources-pdf.test.js agent/src/answers/response-media.test.js agent/src/visualization/visualization-planner.test.js agent/src/visualization/visualization-engine.test.js agent/src/sql-agent/sector-aggregate.test.js agent/src/execution/execution-plan.test.js agent/src/execution/execution-planner.test.js agent/src/execution/execution-orchestrator.test.js agent/src/evaluation/evaluation-smoke.test.js agent/src/cache/company-cache.test.js agent/src/capability/recommendation-engine.test.js agent/src/knowledge/framework-registry.test.js agent/src/evaluation/quality-gates.test.js agent/src/ops/reliability.test.js agent/src/ops/monitoring-auth.test.js agent/src/evaluation/load-helpers.test.js",
     "evaluate:smoke": "node agent/scripts/evaluate.js --gate smoke",
     "evaluate:ci": "node agent/scripts/evaluate.js --gate plan-ci",
     "evaluate:pipeline": "node agent/scripts/evaluate.js --gate pipeline --write",
     "evaluate": "node agent/scripts/evaluate.js --tier full --mode pipeline --write",
     "evaluate:report": "node agent/scripts/evaluate.js --gate smoke --write",
     "ci": "node agent/scripts/ci.js",
-    "ci:summary": "node agent/scripts/ci-summary.js --gate plan-ci --write"
+    "ci:summary": "node agent/scripts/ci-summary.js --gate plan-ci --write",
+    "load-test": "node agent/scripts/load-test.js --mode plan",
+    "load-test:http": "node agent/scripts/load-test.js --mode http",
+    "load-test:conversation": "node agent/scripts/load-test.js --mode plan --pack long-conversation --concurrency 4 --requests 24",
+    "acceptance": "node agent/scripts/acceptance-test.js --mode plan --min-pass-rate 0.95",
+    "acceptance:http": "node agent/scripts/acceptance-test.js --mode http --min-pass-rate 0.90"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1085.0",

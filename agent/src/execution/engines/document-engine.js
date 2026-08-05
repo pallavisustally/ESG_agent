@@ -15,13 +15,22 @@ export async function runDocumentEngine(ctx = {}) {
       error: 'document_not_required',
     });
   }
-  const text = buildDocumentDraft(ctx.userMessage || '');
-  return createEngineResponse({
-    engine: EXECUTION_ENGINES.DOCUMENT,
-    ok: Boolean(text),
-    text,
-    dataText: text,
-    confidence: 0.75,
-    assumptions: ['Draft template — customize before use; not the company\'s official policy.'],
-  });
+  try {
+    const text = buildDocumentDraft(ctx.userMessage || '');
+    return createEngineResponse({
+      engine: EXECUTION_ENGINES.DOCUMENT,
+      ok: Boolean(text),
+      text: text || '',
+      dataText: text || '',
+      confidence: 0.75,
+      assumptions: ['Draft template — customize before use; not the company\'s official policy.'],
+    });
+  } catch (err) {
+    return createEngineResponse({
+      engine: EXECUTION_ENGINES.DOCUMENT,
+      ok: false,
+      text: '',
+      error: String(err?.message || err),
+    });
+  }
 }

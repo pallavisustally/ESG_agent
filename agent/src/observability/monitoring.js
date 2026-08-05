@@ -1,14 +1,12 @@
 /**
- * Phase 14 — Production monitoring metrics.
+ * Phase 14 / Production Readiness Part 2 — Production monitoring metrics.
  *
- * Aggregates from agent_observability.jsonl:
- * - Wrong tool selection
- * - Planner failures
- * - SQL miss rate
- * - PDF fallback rate
- * - Clarification rate
- * - Validation failures
- * - Average latency
+ * Aggregates from agent_observability.jsonl + in-process counters:
+ * - Wrong tool selection, planner failures
+ * - SQL miss / PDF / narrative fallback rates
+ * - Clarification rate, validation warnings/failures
+ * - Engine failures/timeouts, recommendation usage
+ * - Average latency + slowest recent requests
  */
 
 import fs from 'fs';
@@ -18,6 +16,10 @@ import { logAgentEvent } from './agent-logger.js';
 
 const LOG_PATH = resolveFromProject('data', 'agent_observability.jsonl');
 const METRICS_PATH = resolveFromProject('data', 'agent_monitoring_metrics.json');
+
+const SLOW_REQUEST_MS = Number(process.env.SLOW_REQUEST_MS || 5000);
+const RECENT_REQUEST_RING = Math.max(10, Number(process.env.MONITORING_RECENT_RING || 50));
+const SLOWEST_LIMIT = Math.max(5, Number(process.env.MONITORING_SLOWEST_LIMIT || 10));
 
 /** In-process counters (reset on process restart; also mirrored into JSONL). */
 const counters = {
@@ -32,19 +34,37 @@ const counters = {
   clarifications: 0,
   planValidationFailures: 0,
   responseValidationFailures: 0,
+  responseValidationWarnings: 0,
   lowIntentConfidence: 0,
   engineFailures: 0,
   engineTimeouts: 0,
+  recommendationRuns: 0,
+  recommendationFailures: 0,
   errorsByCode: {},
   latencySumMs: 0,
   latencyCount: 0,
 };
+
+/** @type {{ requestId: string|null, latencyMs: number, ts: string, intent: string|null, strategy: string|null, slow: boolean }[]} */
+const recentRequests = [];
 
 export function resetMonitoringCounters() {
   for (const key of Object.keys(counters)) {
     if (key === 'errorsByCode') counters[key] = {};
     else counters[key] = 0;
   }
+  recentRequests.length = 0;
+}
+
+function pushRecentRequest(entry) {
+  recentRequests.push(entry);
+  while (recentRequests.length > RECENT_REQUEST_RING) recentRequests.shift();
+}
+
+function getSlowestRequests(limit = SLOWEST_LIMIT) {
+  return [...recentRequests]
+    .sort((a, b) => b.latencyMs - a.latencyMs)
+    .slice(0, limit);
 }
 
 /**
@@ -61,11 +81,17 @@ export function recordRequestMetrics({
   clarification = false,
   planValidationFailed = false,
   responseValidationFailed = false,
+  responseValidationWarning = false,
   lowIntentConfidence = false,
   engineFailure = false,
   engineTimeout = false,
+  recommendationRun = false,
+  recommendationFailure = false,
   errorCode = null,
   latencyMs = null,
+  requestId = null,
+  intent = null,
+  strategy = null,
 } = {}) {
   counters.requests += 1;
   if (wrongTool) counters.wrongToolSelection += 1;
@@ -78,15 +104,27 @@ export function recordRequestMetrics({
   if (clarification) counters.clarifications += 1;
   if (planValidationFailed) counters.planValidationFailures += 1;
   if (responseValidationFailed) counters.responseValidationFailures += 1;
+  if (responseValidationWarning) counters.responseValidationWarnings += 1;
   if (lowIntentConfidence) counters.lowIntentConfidence += 1;
   if (engineFailure) counters.engineFailures += 1;
   if (engineTimeout) counters.engineTimeouts += 1;
+  if (recommendationRun) counters.recommendationRuns += 1;
+  if (recommendationFailure) counters.recommendationFailures += 1;
   if (errorCode) {
     counters.errorsByCode[errorCode] = (counters.errorsByCode[errorCode] || 0) + 1;
   }
   if (latencyMs != null && Number.isFinite(Number(latencyMs))) {
-    counters.latencySumMs += Number(latencyMs);
+    const ms = Number(latencyMs);
+    counters.latencySumMs += ms;
     counters.latencyCount += 1;
+    pushRecentRequest({
+      requestId: requestId || null,
+      latencyMs: ms,
+      ts: new Date().toISOString(),
+      intent: intent || null,
+      strategy: strategy || null,
+      slow: ms >= SLOW_REQUEST_MS,
+    });
   }
 }
 
@@ -103,6 +141,10 @@ export function getMonitoringSnapshot() {
     ? Math.round(counters.latencySumMs / counters.latencyCount)
     : null;
 
+  const sqlSuccessRate = counters.sqlAttempts
+    ? rate(counters.sqlAttempts - counters.sqlMisses, counters.sqlAttempts)
+    : null;
+
   return {
     ts: new Date().toISOString(),
     requests: counters.requests,
@@ -112,25 +154,39 @@ export function getMonitoringSnapshot() {
     plannerFailureRate: rate(counters.plannerFailures, counters.requests),
     plannerReplans: counters.plannerReplans,
     sqlMissRate: rate(counters.sqlMisses, counters.sqlAttempts || counters.requests),
+    sqlSuccessRate,
     sqlAttempts: counters.sqlAttempts,
     sqlMisses: counters.sqlMisses,
     pdfFallbackRate: rate(counters.pdfFallbacks, counters.requests),
     pdfFallbacks: counters.pdfFallbacks,
     narrativeFallbacks: counters.narrativeFallbacks,
+    reportLookupRate: rate(counters.narrativeFallbacks + counters.pdfFallbacks, counters.requests),
     clarificationRate: rate(counters.clarifications, counters.requests),
     clarifications: counters.clarifications,
     planValidationFailures: counters.planValidationFailures,
     planValidationFailureRate: rate(counters.planValidationFailures, counters.requests),
     responseValidationFailures: counters.responseValidationFailures,
     responseValidationFailureRate: rate(counters.responseValidationFailures, counters.requests),
+    responseValidationWarnings: counters.responseValidationWarnings,
+    responseValidationWarningRate: rate(counters.responseValidationWarnings, counters.requests),
     lowIntentConfidence: counters.lowIntentConfidence,
     lowIntentConfidenceRate: rate(counters.lowIntentConfidence, counters.requests),
     engineFailures: counters.engineFailures,
     engineFailureRate: rate(counters.engineFailures, counters.requests),
     engineTimeouts: counters.engineTimeouts,
     engineTimeoutRate: rate(counters.engineTimeouts, counters.requests),
+    recommendationRuns: counters.recommendationRuns,
+    recommendationFailures: counters.recommendationFailures,
+    recommendationUsageRate: rate(counters.recommendationRuns, counters.requests),
+    recommendationFailureRate: rate(
+      counters.recommendationFailures,
+      counters.recommendationRuns || counters.requests,
+    ),
     errorsByCode: { ...counters.errorsByCode },
     averageLatencyMs: avgLatencyMs,
+    slowRequestThresholdMs: SLOW_REQUEST_MS,
+    slowRequestCount: recentRequests.filter((r) => r.slow).length,
+    slowestRequests: getSlowestRequests(),
   };
 }
 
@@ -146,7 +202,7 @@ export function flushMonitoringSnapshot() {
   } catch (err) {
     console.warn('[Monitoring] failed to write metrics file:', err.message);
   }
-  logAgentEvent({ stage: 'monitoring_snapshot', ...snapshot });
+  logAgentEvent({ stage: 'monitoring_snapshot', ...snapshot, slowestRequests: undefined });
   return snapshot;
 }
 
@@ -190,13 +246,20 @@ export function recordFromPipelineResult(result = {}, { latencyMs = null, errorC
     plannerScore?.dimensions?.tool != null && plannerScore.dimensions.tool < 0.2,
   ) || (planValidation.errors || []).some((e) => /tool|strategy/i.test(e));
 
+  const engineOrder = result.engineTrace?.order || [];
   const engineFailed = Boolean(
     result.engineTrace?.failed?.length
     || resolvedErrorCode === 'ENGINE_FAILURE'
     || resolvedErrorCode === 'TIMEOUT',
   );
   const engineTimeout = resolvedErrorCode === 'TIMEOUT'
-    || (result.engineTrace?.order || []).some((r) => r.errorCode === 'TIMEOUT');
+    || engineOrder.some((r) => r.errorCode === 'TIMEOUT');
+
+  const recRuns = engineOrder.filter((r) => r.engine === 'recommendation' && !/_not_required$/i.test(String(r.error || '')));
+  const recommendationRun = recRuns.length > 0
+    || Boolean(result.executionPlan?.needsRecommendation);
+  const recommendationFailure = recRuns.some((r) => !r.ok)
+    || (result.engineTrace?.failed || []).includes('recommendation');
 
   recordRequestMetrics({
     wrongTool,
@@ -210,12 +273,18 @@ export function recordFromPipelineResult(result = {}, { latencyMs = null, errorC
     planValidationFailed: planValidation.ok === false,
     responseValidationFailed: responseValidation?.ok === false
       || responseValidation?.verdict === 'ERROR',
+    responseValidationWarning: responseValidation?.verdict === 'WARNING',
     lowIntentConfidence: Number(classification.confidence) > 0
       && Number(classification.confidence) < Number(process.env.PLAN_MIN_CONFIDENCE || 0.45),
     engineFailure: engineFailed,
     engineTimeout,
+    recommendationRun,
+    recommendationFailure,
     errorCode: resolvedErrorCode,
     latencyMs: latencyMs ?? result.latencyMs ?? null,
+    requestId: result.requestId || result.trace?.requestId || null,
+    intent: classification.intent || result.executionPlan?.intent || null,
+    strategy: result.executionPlan?.executionStrategy || route.mode || null,
   });
 
   return getMonitoringSnapshot();
@@ -234,10 +303,13 @@ export function aggregateObservabilityLog({
     byStage: {},
     planValidationFailures: 0,
     responseValidationFailures: 0,
+    responseValidationWarnings: 0,
     clarifications: 0,
     sqlDocumentFallbacks: 0,
     pdfSources: 0,
     narrativeSources: 0,
+    recommendationRuns: 0,
+    recommendationFailures: 0,
     latencies: [],
   };
 
@@ -267,11 +339,16 @@ export function aggregateObservabilityLog({
 
     if (stage === 'plan_validate' && row.ok === false) summary.planValidationFailures += 1;
     if (stage === 'response_validate' && row.ok === false) summary.responseValidationFailures += 1;
+    if (stage === 'response_validate' && row.verdict === 'WARNING') summary.responseValidationWarnings += 1;
     if (stage === 'clarify_prior_companies' || row.mode === 'clarify') summary.clarifications += 1;
     if (stage === 'sql_document_fallback') {
       summary.sqlDocumentFallbacks += 1;
       if (row.source === 'pdf' || row.responseSource === 'PDF') summary.pdfSources += 1;
       if (row.source === 'narrative' || row.responseSource === 'Narrative') summary.narrativeSources += 1;
+    }
+    if (stage === 'engine_execution' && row.tool === 'recommendation') {
+      summary.recommendationRuns += 1;
+      if (row.ok === false) summary.recommendationFailures += 1;
     }
     if (row.latencyMs != null && Number.isFinite(Number(row.latencyMs))) {
       summary.latencies.push(Number(row.latencyMs));
@@ -298,4 +375,4 @@ export function aggregateObservabilityLog({
   };
 }
 
-export { counters as _monitoringCounters, LOG_PATH, METRICS_PATH };
+export { counters as _monitoringCounters, LOG_PATH, METRICS_PATH, recentRequests as _recentRequests };

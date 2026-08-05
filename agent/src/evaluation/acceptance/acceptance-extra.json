@@ -1,0 +1,1543 @@
+[
+  {
+    "id": "acc-analytics-reliance-scope2",
+    "family": "analytics",
+    "question": "What are Reliance Scope 2 emissions in 2024?",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true,
+      "metric": true,
+      "year": true
+    },
+    "expectedEntities": [
+      "Reliance"
+    ],
+    "expectedMetric": "scope2_emissions",
+    "expectedYear": 2024
+  },
+  {
+    "id": "acc-analytics-hdfc-scope1",
+    "family": "analytics",
+    "question": "HDFC Bank Scope 1 emissions 2023",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true,
+      "metric": true,
+      "year": true
+    },
+    "expectedEntities": [
+      "HDFC"
+    ],
+    "expectedMetric": "scope1_emissions",
+    "expectedYear": 2023
+  },
+  {
+    "id": "acc-analytics-wipro-energy",
+    "family": "analytics",
+    "question": "Wipro renewable energy share 2024",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true,
+      "metric": true
+    },
+    "expectedEntities": [
+      "Wipro"
+    ],
+    "expectedMetric": "renewable_energy_share"
+  },
+  {
+    "id": "acc-analytics-tcs-water",
+    "family": "analytics",
+    "question": "TCS water consumption in 2024",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true,
+      "metric": true
+    },
+    "expectedEntities": [
+      "TCS"
+    ],
+    "expectedMetric": "water_consumption"
+  },
+  {
+    "id": "acc-analytics-infosys-waste",
+    "family": "analytics",
+    "question": "Infosys waste generated 2024",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true,
+      "metric": true
+    },
+    "expectedEntities": [
+      "Infosys"
+    ],
+    "expectedMetric": "waste_generated"
+  },
+  {
+    "id": "acc-rank-bottom-scope1",
+    "family": "rankings",
+    "question": "Bottom 5 companies by Scope 1 emissions 2024",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "metric": true
+    },
+    "expectedMetric": "scope1_emissions"
+  },
+  {
+    "id": "acc-rank-top-female",
+    "family": "rankings",
+    "question": "Top 10 companies by female employee share",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "metric": true
+    },
+    "expectedMetric": "female_employee_share"
+  },
+  {
+    "id": "acc-rank-top-renewable",
+    "family": "rankings",
+    "question": "Top companies by renewable energy share in 2024",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true
+    },
+    "expectedMetric": "renewable_energy_share"
+  },
+  {
+    "id": "acc-compare-tcs-infosys-scope2",
+    "family": "comparisons",
+    "question": "Compare TCS vs Infosys Scope 2 emissions",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "metric": true
+    },
+    "expectedMetric": "scope2_emissions"
+  },
+  {
+    "id": "acc-compare-three",
+    "family": "comparisons",
+    "question": "Compare Infosys, Wipro and TCS on Scope 1",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true
+    },
+    "expectedMetric": "scope1_emissions"
+  },
+  {
+    "id": "acc-trend-wipro-scope1",
+    "family": "trends",
+    "question": "Wipro Scope 1 emissions over the years",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true
+    },
+    "expectedEntities": [
+      "Wipro"
+    ]
+  },
+  {
+    "id": "acc-trend-tcs-water",
+    "family": "trends",
+    "question": "Show TCS water consumption trend",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true
+    },
+    "expectedEntities": [
+      "TCS"
+    ]
+  },
+  {
+    "id": "acc-sector-banking",
+    "family": "sector-analysis",
+    "question": "Average Scope 1 for banking sector 2024",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true
+    },
+    "expectedMetric": "scope1_emissions"
+  },
+  {
+    "id": "acc-sector-it-female",
+    "family": "sector-analysis",
+    "question": "IT sector average female employee share",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-chart-top5-scope2",
+    "family": "charts",
+    "question": "Chart top 5 companies by Scope 2 emissions 2024",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "chart": true
+    },
+    "expectedChart": true
+  },
+  {
+    "id": "acc-chart-compare-bar",
+    "family": "charts",
+    "question": "Bar chart comparing Infosys and Wipro Scope 1",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-knowledge-materiality",
+    "family": "knowledge",
+    "question": "What is materiality?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-knowledge-sbti",
+    "family": "knowledge",
+    "question": "What is SBTi?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-knowledge-greenwashing",
+    "family": "knowledge",
+    "question": "Explain greenwashing",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-knowledge-circular",
+    "family": "knowledge",
+    "question": "What is circular economy?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-knowledge-biodiversity",
+    "family": "knowledge",
+    "question": "What is biodiversity in ESG?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-knowledge-eid",
+    "family": "knowledge",
+    "question": "What are Essential Indicators?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-knowledge-sdg",
+    "family": "knowledge",
+    "question": "What are the SDGs?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-knowledge-transition",
+    "family": "knowledge",
+    "question": "What is a climate transition plan?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-knowledge-scope3",
+    "family": "knowledge",
+    "question": "What is Scope 3?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-knowledge-carbon-footprint",
+    "family": "knowledge",
+    "question": "Define carbon footprint",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-compliance-brsr-p6",
+    "family": "compliance",
+    "question": "Explain BRSR Principle 6",
+    "expected": {
+      "executionStrategy": "compliance",
+      "engines": [
+        "compliance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-compliance-brsr-p1",
+    "family": "compliance",
+    "question": "What is BRSR Principle 1?",
+    "expected": {
+      "executionStrategy": "compliance",
+      "engines": [
+        "compliance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-compliance-tcfd",
+    "family": "compliance",
+    "question": "What is TCFD?",
+    "expected": {
+      "executionStrategy": "compliance",
+      "engines": [
+        "compliance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-compliance-sasb",
+    "family": "compliance",
+    "question": "Explain SASB",
+    "expected": {
+      "executionStrategy": "compliance",
+      "engines": [
+        "compliance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-compliance-csrd",
+    "family": "compliance",
+    "question": "What is CSRD?",
+    "expected": {
+      "executionStrategy": "compliance",
+      "engines": [
+        "compliance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-compliance-ngrbc",
+    "family": "compliance",
+    "question": "What is NGRBC?",
+    "expected": {
+      "executionStrategy": "compliance",
+      "engines": [
+        "compliance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-compliance-gri-303",
+    "family": "compliance",
+    "question": "Explain GRI 303",
+    "expected": {
+      "executionStrategy": "compliance",
+      "engines": [
+        "compliance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-compliance-ifrs-s2",
+    "family": "compliance",
+    "question": "What is IFRS S2?",
+    "expected": {
+      "executionStrategy": "compliance",
+      "engines": [
+        "compliance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-guidance-waste",
+    "family": "guidance",
+    "question": "How can I reduce waste?",
+    "expected": {
+      "executionStrategy": "guidance",
+      "engines": [
+        "guidance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-guidance-diversity",
+    "family": "guidance",
+    "question": "How do I improve diversity?",
+    "expected": {
+      "executionStrategy": "guidance",
+      "engines": [
+        "guidance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-guidance-esg-score",
+    "family": "guidance",
+    "question": "How do I improve ESG score?",
+    "expected": {
+      "executionStrategy": "guidance",
+      "engines": [
+        "guidance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-guidance-net-zero",
+    "family": "guidance",
+    "question": "How can my company become carbon neutral?",
+    "expected": {
+      "executionStrategy": "guidance",
+      "engines": [
+        "guidance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-rec-wipro-esg",
+    "family": "recommendation",
+    "question": "How can Wipro improve its ESG score?",
+    "expected": {
+      "executionStrategy": "recommendation",
+      "engines": [
+        "recommendation"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true
+    },
+    "expectedEntities": [
+      "Wipro"
+    ]
+  },
+  {
+    "id": "acc-rec-tcs-emissions",
+    "family": "recommendation",
+    "question": "Recommend ways for TCS to reduce Scope 1",
+    "expected": {
+      "executionStrategy": "recommendation",
+      "engines": [
+        "recommendation"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true
+    },
+    "expectedEntities": [
+      "TCS"
+    ]
+  },
+  {
+    "id": "acc-rec-infosys-water",
+    "family": "recommendation",
+    "question": "Suggest improvements for Infosys water consumption",
+    "expected": {
+      "executionStrategy": "recommendation",
+      "engines": [
+        "recommendation"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true
+    },
+    "expectedEntities": [
+      "Infosys"
+    ]
+  },
+  {
+    "id": "acc-rec-reliance-improve",
+    "family": "recommendation",
+    "question": "What should Reliance do to improve emissions?",
+    "expected": {
+      "executionStrategy": "recommendation",
+      "engines": [
+        "recommendation"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true
+    },
+    "expectedEntities": [
+      "Reliance"
+    ]
+  },
+  {
+    "id": "acc-report-wipro",
+    "family": "report-lookup",
+    "question": "Summarize Wipro sustainability report",
+    "expected": {
+      "engines": [
+        "report"
+      ]
+    },
+    "score": {
+      "routing": true
+    },
+    "enginesMode": "superset"
+  },
+  {
+    "id": "acc-report-tcs",
+    "family": "report-lookup",
+    "question": "Find TCS BRSR narrative on climate",
+    "expected": {
+      "engines": [
+        "report"
+      ]
+    },
+    "score": {
+      "routing": true
+    },
+    "enginesMode": "superset"
+  },
+  {
+    "id": "acc-pdf-infosys-emissions",
+    "family": "pdf-lookup",
+    "question": "Show Infosys emissions disclosure from the PDF report",
+    "expected": {
+      "engines": [
+        "report"
+      ]
+    },
+    "score": {
+      "routing": true
+    },
+    "enginesMode": "superset"
+  },
+  {
+    "id": "acc-memory-same-company",
+    "family": "conversation-memory",
+    "question": "same for Scope 2",
+    "memory": {
+      "lastIntent": "METRIC_LOOKUP",
+      "lastCompanies": [
+        "Infosys Limited"
+      ],
+      "lastMetric": "scope1_emissions",
+      "lastYear": 2024
+    },
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ],
+      "entities": [
+        "Infosys Limited"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true,
+      "metric": false,
+      "year": true
+    }
+  },
+  {
+    "id": "acc-memory-same-year",
+    "family": "conversation-memory",
+    "question": "same for renewable energy share",
+    "memory": {
+      "lastIntent": "COMPARE_COMPANIES",
+      "lastCompanies": [
+        "Infosys Limited",
+        "Wipro Limited"
+      ],
+      "lastMetric": "scope1_emissions",
+      "lastYear": 2024,
+      "comparisonContext": {
+        "companies": [
+          "Infosys Limited",
+          "Wipro Limited"
+        ],
+        "metric": "scope1_emissions",
+        "year": 2024
+      }
+    },
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": false,
+      "metric": false,
+      "year": false
+    }
+  },
+  {
+    "id": "acc-memory-compare-again",
+    "family": "conversation-memory",
+    "question": "Compare them again on Scope 1",
+    "memory": {
+      "lastEntities": [
+        "Infosys",
+        "Wipro"
+      ],
+      "lastMetric": "scope1_emissions",
+      "lastYear": 2024
+    },
+    "expected": {
+      "executionStrategy": "analytics"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-followup-recommend",
+    "family": "follow-up",
+    "question": "How can they improve that?",
+    "memory": {
+      "lastEntities": [
+        "Infosys"
+      ],
+      "lastMetric": "scope1_emissions"
+    },
+    "expected": {
+      "executionStrategy": "guidance",
+      "engines": [
+        "guidance"
+      ]
+    },
+    "score": {
+      "routing": true
+    },
+    "notes": "Without explicit company improve cues, planner may choose guidance"
+  },
+  {
+    "id": "acc-followup-trend",
+    "family": "follow-up",
+    "question": "Show the trend for that metric",
+    "memory": {
+      "lastEntities": [
+        "TCS"
+      ],
+      "lastMetric": "water_consumption"
+    },
+    "expected": {
+      "executionStrategy": "analytics"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-fail-unknown-concept",
+    "family": "failure",
+    "question": "What is flibbertigibbet scoring?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    },
+    "notes": "Should route to knowledge; answer may clarify unknown"
+  },
+  {
+    "id": "acc-fail-no-company-metric",
+    "family": "failure",
+    "question": "What are Scope 1 emissions?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    },
+    "notes": "Definition without company \u2192 knowledge"
+  },
+  {
+    "id": "acc-fail-ambiguous-they",
+    "family": "failure",
+    "question": "What are their emissions?",
+    "expected": {},
+    "score": {
+      "routing": false
+    },
+    "expectClarification": true
+  },
+  {
+    "id": "acc-count-companies",
+    "family": "analytics",
+    "question": "How many companies have BRSR data?",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-list-companies",
+    "family": "analytics",
+    "question": "List all companies with BRSR reports",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-doc-esg-policy",
+    "family": "document",
+    "question": "Draft an ESG policy",
+    "expected": {
+      "executionStrategy": "document",
+      "engines": [
+        "document"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-doc-net-zero-roadmap",
+    "family": "document",
+    "question": "Generate a net zero roadmap",
+    "expected": {
+      "executionStrategy": "document",
+      "engines": [
+        "document"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-knowledge-brsr",
+    "family": "knowledge",
+    "question": "What is BRSR?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-knowledge-esg-score",
+    "family": "knowledge",
+    "question": "What is an ESG score?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-compliance-cdp",
+    "family": "compliance",
+    "question": "What is CDP?",
+    "expected": {
+      "executionStrategy": "compliance",
+      "engines": [
+        "compliance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-compliance-sfdr",
+    "family": "compliance",
+    "question": "What is SFDR?",
+    "expected": {
+      "executionStrategy": "compliance",
+      "engines": [
+        "compliance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-analytics-scope3-infosys",
+    "family": "analytics",
+    "question": "Infosys Scope 3 emissions 2024",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true,
+      "metric": true
+    },
+    "expectedEntities": [
+      "Infosys"
+    ],
+    "expectedMetric": "scope3_emissions"
+  },
+  {
+    "id": "acc-rank-waste",
+    "family": "rankings",
+    "question": "Top 5 by waste generated 2024",
+    "expected": {
+      "executionStrategy": "analytics"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-sector-energy",
+    "family": "sector-analysis",
+    "question": "Energy sector average Scope 1",
+    "expected": {
+      "executionStrategy": "analytics"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-guidance-water",
+    "family": "guidance",
+    "question": "How can I reduce water consumption?",
+    "expected": {
+      "executionStrategy": "guidance",
+      "engines": [
+        "guidance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-rec-went-up",
+    "family": "recommendation",
+    "question": "Wipro Scope 1 went up \u2014 what should they improve?",
+    "expected": {
+      "executionStrategy": "recommendation",
+      "engines": [
+        "recommendation"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true
+    },
+    "expectedEntities": [
+      "Wipro"
+    ]
+  },
+  {
+    "id": "acc-memory-prior-metric",
+    "family": "conversation-memory",
+    "question": "Scope 1 for TCS in the same year",
+    "memory": {
+      "lastIntent": "METRIC_LOOKUP",
+      "lastCompanies": [
+        "Infosys Limited"
+      ],
+      "lastMetric": "scope1_emissions",
+      "lastYear": 2024
+    },
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-followup-chart",
+    "family": "follow-up",
+    "question": "Show that as a chart",
+    "memory": {
+      "lastEntities": [
+        "Infosys",
+        "Wipro"
+      ],
+      "lastMetric": "scope1_emissions"
+    },
+    "expected": {
+      "executionStrategy": "analytics"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-knowledge-metric",
+    "family": "knowledge",
+    "question": "What is a metric in ESG?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-compliance-brsr-p5",
+    "family": "compliance",
+    "question": "Explain BRSR Principle 5",
+    "expected": {
+      "executionStrategy": "compliance",
+      "engines": [
+        "compliance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-analytics-board-diversity",
+    "family": "analytics",
+    "question": "Infosys female board share 2024",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true
+    },
+    "expectedEntities": [
+      "Infosys"
+    ]
+  },
+  {
+    "id": "acc-compare-scope1-scope2",
+    "family": "comparisons",
+    "question": "Compare Infosys Scope 1 and Scope 2",
+    "expected": {
+      "executionStrategy": "analytics"
+    },
+    "score": {
+      "routing": true
+    },
+    "expectedEntities": [
+      "Infosys"
+    ]
+  },
+  {
+    "id": "acc-fail-empty-gibberish",
+    "family": "failure",
+    "question": "asdf qwer zxcv",
+    "expected": {},
+    "score": {
+      "routing": false
+    },
+    "expectStrategyPresent": true
+  },
+  {
+    "id": "acc-report-infosys",
+    "family": "report-lookup",
+    "question": "Summarize Infosys BRSR report",
+    "expected": {
+      "engines": [
+        "report"
+      ]
+    },
+    "score": {
+      "routing": true
+    },
+    "enginesMode": "superset"
+  },
+  {
+    "id": "acc-rec-my-company",
+    "family": "recommendation",
+    "question": "How can my company improve ESG?",
+    "expected": {
+      "executionStrategy": "recommendation"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-analytics-latest-year",
+    "family": "analytics",
+    "question": "Latest Scope 1 for Infosys",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true
+    },
+    "expectedEntities": [
+      "Infosys"
+    ]
+  },
+  {
+    "id": "acc-knowledge-carbon-neutral",
+    "family": "knowledge",
+    "question": "What is carbon neutrality?",
+    "expected": {
+      "executionStrategy": "knowledge"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-compliance-esrs",
+    "family": "compliance",
+    "question": "What are ESRS?",
+    "expected": {
+      "executionStrategy": "compliance"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-rank-water",
+    "family": "rankings",
+    "question": "Top 5 companies by water consumption 2024",
+    "expected": {
+      "executionStrategy": "analytics"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-trend-infosys-scope2",
+    "family": "trends",
+    "question": "Infosys Scope 2 trend",
+    "expected": {
+      "executionStrategy": "analytics"
+    },
+    "score": {
+      "routing": true,
+      "entity": true
+    },
+    "expectedEntities": [
+      "Infosys"
+    ]
+  },
+  {
+    "id": "acc-sector-it-scope2",
+    "family": "sector-analysis",
+    "question": "IT sector Scope 2 average 2024",
+    "expected": {
+      "executionStrategy": "analytics"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-chart-ranking",
+    "family": "charts",
+    "question": "Visualize top 5 Scope 1 emitters",
+    "expected": {
+      "executionStrategy": "analytics"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-doc-climate-plan",
+    "family": "document",
+    "question": "Write a climate action plan",
+    "expected": {
+      "executionStrategy": "document"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-memory-above",
+    "family": "conversation-memory",
+    "question": "Scope 1 for those companies",
+    "memory": {
+      "lastIntent": "COMPARE_COMPANIES",
+      "lastCompanies": [
+        "Infosys Limited",
+        "Wipro Limited",
+        "Tata Consultancy Services Limited"
+      ],
+      "lastMetric": "scope1_emissions",
+      "lastYear": 2024,
+      "comparisonContext": {
+        "companies": [
+          "Infosys Limited",
+          "Wipro Limited",
+          "Tata Consultancy Services Limited"
+        ],
+        "metric": "scope1_emissions",
+        "year": 2024
+      }
+    },
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-fail-unknown-company",
+    "family": "failure",
+    "question": "What are AcmeFakeCorpXYZ Scope 1 emissions?",
+    "expected": {
+      "executionStrategy": "knowledge",
+      "engines": [
+        "knowledge"
+      ]
+    },
+    "score": {
+      "routing": true
+    },
+    "notes": "Unknown token may classify as informational knowledge"
+  },
+  {
+    "id": "acc-compliance-brsr-p9",
+    "family": "compliance",
+    "question": "BRSR Principle 9 explained",
+    "expected": {
+      "executionStrategy": "compliance"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-rec-diversity",
+    "family": "recommendation",
+    "question": "How can Infosys improve gender diversity?",
+    "expected": {
+      "executionStrategy": "recommendation"
+    },
+    "score": {
+      "routing": true,
+      "entity": true
+    },
+    "expectedEntities": [
+      "Infosys"
+    ]
+  },
+  {
+    "id": "acc-followup-previous-year",
+    "family": "follow-up",
+    "question": "same company previous year Scope 1",
+    "memory": {
+      "lastIntent": "METRIC_LOOKUP",
+      "lastCompanies": [
+        "Infosys Limited"
+      ],
+      "lastMetric": "scope1_emissions",
+      "lastYear": 2024
+    },
+    "expected": {
+      "executionStrategy": "analytics"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-knowledge-renewable",
+    "family": "knowledge",
+    "question": "What is renewable energy in BRSR?",
+    "expected": {
+      "executionStrategy": "knowledge"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-compare-peers-rank",
+    "family": "comparisons",
+    "question": "How does Infosys compare to peers on Scope 1?",
+    "expected": {
+      "executionStrategy": "analytics"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-pdf-climate",
+    "family": "pdf-lookup",
+    "question": "Open Infosys climate section in the BRSR PDF",
+    "expected": {
+      "engines": [
+        "report"
+      ]
+    },
+    "score": {
+      "routing": true
+    },
+    "enginesMode": "superset"
+  },
+  {
+    "id": "acc-guidance-carbon",
+    "family": "guidance",
+    "question": "How can I reduce carbon emissions?",
+    "expected": {
+      "executionStrategy": "guidance"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-rec-hdfc",
+    "family": "recommendation",
+    "question": "Suggest ESG improvements for HDFC Bank",
+    "expected": {
+      "executionStrategy": "recommendation"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-fail-clarification-which",
+    "family": "failure",
+    "question": "emissions?",
+    "expected": {},
+    "score": {
+      "routing": false
+    },
+    "expectStrategyPresent": true
+  },
+  {
+    "id": "acc-sector-all-scope1",
+    "family": "sector-analysis",
+    "question": "Sector-wise average Scope 1 emissions",
+    "expected": {
+      "executionStrategy": "analytics"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-trend-multi-year",
+    "family": "trends",
+    "question": "Infosys Scope 1 from 2021 to 2024",
+    "expected": {
+      "executionStrategy": "analytics"
+    },
+    "score": {
+      "routing": true,
+      "entity": true
+    },
+    "expectedEntities": [
+      "Infosys"
+    ]
+  },
+  {
+    "id": "acc-knowledge-net-zero",
+    "family": "knowledge",
+    "question": "What is Net Zero?",
+    "expected": {
+      "executionStrategy": "knowledge"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-doc-sustainability-roadmap",
+    "family": "document",
+    "question": "Create a sustainability roadmap",
+    "expected": {
+      "executionStrategy": "document"
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-guidance-circular",
+    "family": "guidance",
+    "question": "How can I reduce waste with circular economy?",
+    "expected": {
+      "executionStrategy": "guidance",
+      "engines": [
+        "guidance"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  },
+  {
+    "id": "acc-analytics-scope1-sum",
+    "family": "analytics",
+    "question": "What are Infosys Scope 1 and Scope 2 emissions in 2024?",
+    "expected": {
+      "executionStrategy": "analytics",
+      "engines": [
+        "analytics"
+      ]
+    },
+    "score": {
+      "routing": true,
+      "entity": true
+    },
+    "expectedEntities": [
+      "Infosys"
+    ]
+  },
+  {
+    "id": "acc-followup-improve-company",
+    "family": "follow-up",
+    "question": "Suggest improvements for Infosys on that metric",
+    "memory": {
+      "lastIntent": "METRIC_LOOKUP",
+      "lastCompanies": [
+        "Infosys Limited"
+      ],
+      "lastMetric": "scope1_emissions",
+      "lastYear": 2024
+    },
+    "expected": {
+      "executionStrategy": "recommendation",
+      "engines": [
+        "recommendation"
+      ]
+    },
+    "score": {
+      "routing": true
+    }
+  }
+]

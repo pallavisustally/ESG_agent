@@ -15,12 +15,29 @@ export async function runGuidanceEngine(ctx = {}) {
       error: 'guidance_not_required',
     });
   }
-  const text = await buildGuidanceAnswer(ctx.userMessage || '');
-  return createEngineResponse({
-    engine: EXECUTION_ENGINES.GUIDANCE,
-    ok: Boolean(text),
-    text,
-    dataText: text,
-    confidence: 0.85,
-  });
+  try {
+    if (ctx.signal?.aborted) {
+      return createEngineResponse({
+        engine: EXECUTION_ENGINES.GUIDANCE,
+        ok: false,
+        text: '',
+        error: 'guidance_aborted',
+      });
+    }
+    const text = await buildGuidanceAnswer(ctx.userMessage || '');
+    return createEngineResponse({
+      engine: EXECUTION_ENGINES.GUIDANCE,
+      ok: Boolean(text),
+      text: text || '',
+      dataText: text || '',
+      confidence: 0.85,
+    });
+  } catch (err) {
+    return createEngineResponse({
+      engine: EXECUTION_ENGINES.GUIDANCE,
+      ok: false,
+      text: '',
+      error: String(err?.message || err),
+    });
+  }
 }

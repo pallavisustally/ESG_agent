@@ -166,6 +166,31 @@ describe('monitoring', () => {
     assert.equal(snap.errorsByCode.TIMEOUT, 1);
   });
 
+  it('tracks recommendation metrics, warnings, and slowest requests', () => {
+    resetMonitoringCounters();
+    recordFromPipelineResult({
+      requestId: 'req-slow',
+      classification: { intent: 'METRIC_LOOKUP', confidence: 0.9 },
+      route: { mode: 'execution_planner' },
+      executionPlan: { needsSql: true, needsRecommendation: true, executionStrategy: 'recommendation' },
+      engineTrace: {
+        failed: ['recommendation'],
+        order: [
+          { engine: 'analytics', ok: true, errorCode: null },
+          { engine: 'recommendation', ok: false, errorCode: 'TIMEOUT' },
+        ],
+      },
+      responseValidation: { ok: true, verdict: 'WARNING' },
+    }, { latencyMs: 9000 });
+    const snap = getMonitoringSnapshot();
+    assert.equal(snap.recommendationRuns, 1);
+    assert.equal(snap.recommendationFailures, 1);
+    assert.equal(snap.responseValidationWarnings, 1);
+    assert.equal(snap.slowRequestCount, 1);
+    assert.ok(snap.slowestRequests.some((r) => r.requestId === 'req-slow' && r.latencyMs === 9000));
+    assert.ok(snap.sqlSuccessRate == null || snap.sqlSuccessRate <= 1);
+  });
+
   it('flushMonitoringSnapshot writes metrics object', () => {
     resetMonitoringCounters();
     recordRequestMetrics({ latencyMs: 50 });

@@ -66,7 +66,7 @@ async function loadModules() {
     }
   } catch (err) {
     console.error('CRITICAL STARTUP ERROR:', err);
-    startupError = err;
+    startupError = String(err?.message || err);
   }
 }
 
@@ -156,6 +156,37 @@ import('../scripts/preprocess.js').then(module => {
   console.error('Failed to import processXmlFile:', err);
 });
 
+// Liveness — process up (no DB). Use for platform probes.
+app.get('/healthz', (_req, res) => {
+  import('./ops/health.js').then(({ buildLivenessPayload }) => {
+    res.status(200).json(buildLivenessPayload());
+  }).catch(() => {
+    res.status(200).json({ ok: true, status: 'alive' });
+  });
+});
+
+// Readiness — modules loaded + DB ping.
+app.get('/readyz', async (_req, res) => {
+  try {
+    const { buildReadinessPayload } = await import('./ops/health.js');
+    const { checkDbHealth } = await import('./db-health.js');
+    const payload = await buildReadinessPayload({
+      startupError,
+      loadPromise,
+      getDb,
+      checkDbHealth,
+    });
+    res.status(payload.ok ? 200 : 503).json(payload);
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      status: 'not_ready',
+      reason: 'exception',
+      error: error.message,
+    });
+  }
+});
+
 // API: Get database status & available reports
 app.get('/api/status', async (req, res) => {
   try {
@@ -188,38 +219,49 @@ app.get('/api/status', async (req, res) => {
   }
 });
 
-// Phase 14 — production monitoring snapshot (planner / fallback / validation rates)
+// Ops dashboard (static). API still auth-gated below.
+app.get('/ops', (_req, res) => {
+  res.sendFile(path.join(AGENT_ROOT, 'src', 'public', 'ops.html'));
+});
+
+// Production monitoring snapshot — requires MONITORING_TOKEN or session (Part 2).
 app.get('/api/monitoring', async (req, res) => {
-  try {
-    const {
-      getMonitoringSnapshot,
-      aggregateObservabilityLog,
-      flushMonitoringSnapshot,
-    } = await import('./observability/monitoring.js');
-    const flush = String(req.query.flush || '') === '1';
-    const snapshot = flush ? flushMonitoringSnapshot() : getMonitoringSnapshot();
-    const historical = aggregateObservabilityLog({ maxLines: Number(req.query.lines) || 2000 });
-    res.json({
-      success: true,
-      live: snapshot,
-      historical: {
-        ok: historical.ok,
-        events: historical.events,
-        byStage: historical.byStage,
-        planValidationFailures: historical.planValidationFailures,
-        responseValidationFailures: historical.responseValidationFailures,
-        clarifications: historical.clarifications,
-        sqlDocumentFallbacks: historical.sqlDocumentFallbacks,
-        pdfSources: historical.pdfSources,
-        narrativeSources: historical.narrativeSources,
-        averageLatencyMs: historical.averageLatencyMs,
-        pdfFallbackRate: historical.pdfFallbackRate,
-        clarificationRate: historical.clarificationRate,
-      },
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
+  const { requireMonitoringAccess } = await import('./ops/monitoring-auth.js');
+  requireMonitoringAccess(req, res, async () => {
+    try {
+      const {
+        getMonitoringSnapshot,
+        aggregateObservabilityLog,
+        flushMonitoringSnapshot,
+      } = await import('./observability/monitoring.js');
+      const flush = String(req.query.flush || '') === '1';
+      const snapshot = flush ? flushMonitoringSnapshot() : getMonitoringSnapshot();
+      const historical = aggregateObservabilityLog({ maxLines: Number(req.query.lines) || 2000 });
+      res.json({
+        success: true,
+        live: snapshot,
+        historical: {
+          ok: historical.ok,
+          events: historical.events,
+          byStage: historical.byStage,
+          planValidationFailures: historical.planValidationFailures,
+          responseValidationFailures: historical.responseValidationFailures,
+          responseValidationWarnings: historical.responseValidationWarnings,
+          clarifications: historical.clarifications,
+          sqlDocumentFallbacks: historical.sqlDocumentFallbacks,
+          pdfSources: historical.pdfSources,
+          narrativeSources: historical.narrativeSources,
+          recommendationRuns: historical.recommendationRuns,
+          recommendationFailures: historical.recommendationFailures,
+          averageLatencyMs: historical.averageLatencyMs,
+          pdfFallbackRate: historical.pdfFallbackRate,
+          clarificationRate: historical.clarificationRate,
+        },
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
 });
 
 // API: Get application configuration defaults
@@ -464,6 +506,26 @@ app.post('/api/chat', async (req, res) => {
 
   if (!message) {
     return res.status(400).json({ success: false, error: 'Message is required.' });
+  }
+
+  // Lightweight rate limit (before SSE headers) — CHAT_RATE_LIMIT_RPM=0 disables.
+  try {
+    const {
+      consumeRateLimit,
+      rateLimitKeyFromRequest,
+    } = await import('./ops/rate-limit.js');
+    const limited = consumeRateLimit(rateLimitKeyFromRequest(req));
+    if (!limited.ok) {
+      res.setHeader('Retry-After', String(limited.retryAfterSec));
+      return res.status(429).json({
+        success: false,
+        error: 'Too many requests. Please wait a moment and try again.',
+        retryAfterSec: limited.retryAfterSec,
+        limit: limited.limit,
+      });
+    }
+  } catch (rateErr) {
+    console.warn('[api/chat] rate limit unavailable:', rateErr?.message || rateErr);
   }
 
   console.log(`[User Question] Received: "${message}"`);

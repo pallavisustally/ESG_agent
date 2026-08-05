@@ -15,12 +15,21 @@ export async function runComplianceEngine(ctx = {}) {
       error: 'compliance_not_required',
     });
   }
-  const text = buildComplianceAnswer(ctx.userMessage || '');
-  return createEngineResponse({
-    engine: EXECUTION_ENGINES.COMPLIANCE,
-    ok: Boolean(text),
-    text,
-    dataText: text,
-    confidence: 0.9,
-  });
+  try {
+    const text = buildComplianceAnswer(ctx.userMessage || '');
+    return createEngineResponse({
+      engine: EXECUTION_ENGINES.COMPLIANCE,
+      ok: Boolean(text),
+      text: text || '',
+      dataText: text || '',
+      confidence: 0.9,
+    });
+  } catch (err) {
+    return createEngineResponse({
+      engine: EXECUTION_ENGINES.COMPLIANCE,
+      ok: false,
+      text: 'I could not load that framework explanation right now. Try asking about BRSR, ISSB, GRI, or CSRD.',
+      error: String(err?.message || err),
+    });
+  }
 }

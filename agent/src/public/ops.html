@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ESG Copilot — Ops</title>
+  <link rel="stylesheet" href="/ops.css" />
+</head>
+<body>
+  <header class="ops-header">
+    <div>
+      <h1>ESG Copilot Ops</h1>
+      <p class="sub">Live monitoring from in-process counters + recent observability log</p>
+    </div>
+    <div class="header-actions">
+      <label class="token-field">
+        <span>Token</span>
+        <input id="tokenInput" type="password" placeholder="MONITORING_TOKEN" autocomplete="off" />
+      </label>
+      <button type="button" id="refreshBtn">Refresh</button>
+      <button type="button" id="flushBtn" class="secondary">Flush</button>
+      <a class="link" href="/">← Copilot</a>
+    </div>
+  </header>
+
+  <main>
+    <p id="statusLine" class="status">Loading…</p>
+
+    <section class="grid" id="kpiGrid"></section>
+
+    <section class="panel">
+      <h2>Error codes</h2>
+      <pre id="errorCodes">—</pre>
+    </section>
+
+    <section class="panel">
+      <h2>Slowest recent requests</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Latency</th>
+            <th>Slow</th>
+            <th>Intent</th>
+            <th>Strategy</th>
+            <th>Request</th>
+            <th>Time</th>
+          </tr>
+        </thead>
+        <tbody id="slowBody"></tbody>
+      </table>
+    </section>
+
+    <section class="panel">
+      <h2>Historical log (sample)</h2>
+      <pre id="historical">—</pre>
+    </section>
+  </main>
+
+  <script src="/ops.js"></script>
+</body>
+</html>

@@ -1,0 +1,77 @@
+[
+  {
+    "id": "knowledge-esg",
+    "scenario": "knowledge",
+    "question": "What is ESG?"
+  },
+  {
+    "id": "knowledge-scope1",
+    "scenario": "knowledge",
+    "question": "What is Scope 1?"
+  },
+  {
+    "id": "knowledge-net-zero",
+    "scenario": "knowledge",
+    "question": "What is Net Zero?"
+  },
+  {
+    "id": "compliance-issb",
+    "scenario": "knowledge",
+    "question": "What is ISSB?"
+  },
+  {
+    "id": "compliance-gri-305",
+    "scenario": "knowledge",
+    "question": "Explain GRI 305"
+  },
+  {
+    "id": "guidance-carbon",
+    "scenario": "knowledge",
+    "question": "How can I reduce carbon emissions?"
+  },
+  {
+    "id": "analytics-infosys-scope1",
+    "scenario": "analytics",
+    "question": "What are Infosys Scope 1 emissions in 2024?"
+  },
+  {
+    "id": "analytics-tcs-female",
+    "scenario": "analytics",
+    "question": "What is TCS female employee share in 2024?"
+  },
+  {
+    "id": "rankings-top5-scope1",
+    "scenario": "charts",
+    "question": "Top 5 companies by Scope 1 emissions in 2024"
+  },
+  {
+    "id": "compare-infosys-wipro",
+    "scenario": "charts",
+    "question": "Compare Infosys and Wipro Scope 1 emissions"
+  },
+  {
+    "id": "trends-infosys",
+    "scenario": "analytics",
+    "question": "Show Infosys Scope 1 emissions trend"
+  },
+  {
+    "id": "sector-it-scope1",
+    "scenario": "analytics",
+    "question": "Average Scope 1 emissions for IT sector"
+  },
+  {
+    "id": "recommendation-infosys",
+    "scenario": "recommendation",
+    "question": "Suggest how Infosys can improve its ESG score"
+  },
+  {
+    "id": "recommendation-scope1",
+    "scenario": "recommendation",
+    "question": "Suggest improvements for Infosys Scope 1 emissions"
+  },
+  {
+    "id": "report-infosys-summary",
+    "scenario": "report",
+    "question": "Summarize Infosys BRSR report"
+  }
+]

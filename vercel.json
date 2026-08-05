@@ -13,7 +13,10 @@
           "data/pdf_hf_urls.json",
           "agent/src/public/index.html",
           "agent/src/public/style.css",
-          "agent/src/public/app.js"
+          "agent/src/public/app.js",
+          "agent/src/public/ops.html",
+          "agent/src/public/ops.css",
+          "agent/src/public/ops.js"
         ]
       }
     }

@@ -15,12 +15,21 @@ export async function runKnowledgeEngine(ctx = {}) {
       error: 'knowledge_not_required',
     });
   }
-  const text = buildKnowledgeAnswer(ctx.userMessage || '');
-  return createEngineResponse({
-    engine: EXECUTION_ENGINES.KNOWLEDGE,
-    ok: Boolean(text),
-    text,
-    dataText: text,
-    confidence: 0.9,
-  });
+  try {
+    const text = buildKnowledgeAnswer(ctx.userMessage || '');
+    return createEngineResponse({
+      engine: EXECUTION_ENGINES.KNOWLEDGE,
+      ok: Boolean(text),
+      text: text || '',
+      dataText: text || '',
+      confidence: 0.9,
+    });
+  } catch (err) {
+    return createEngineResponse({
+      engine: EXECUTION_ENGINES.KNOWLEDGE,
+      ok: false,
+      text: 'I could not load that ESG definition right now. Try a common term like Scope 1, ESG, or BRSR.',
+      error: String(err?.message || err),
+    });
+  }
 }

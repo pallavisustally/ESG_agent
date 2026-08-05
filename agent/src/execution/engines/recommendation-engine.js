@@ -1,6 +1,7 @@
 /**
  * Recommendation Engine wrapper — company-specific improvement suggestions.
  * Grounded in verified analytics / peers / sector when available.
+ * Failures are soft: never throw — orchestrator continues with analytics.
  */
 
 import { buildRecommendationAnswer } from '../../capability/recommendation-engine.js';
@@ -17,39 +18,58 @@ export async function runRecommendationEngine(ctx = {}) {
     });
   }
 
-  const companies = ctx.executionPlan?.entities
-    || ctx.classification?.entities
-    || [];
-  const metric = ctx.executionPlan?.metrics?.[0]
-    || ctx.classification?.metric
-    || ctx.analyticsData?.metric
-    || null;
+  try {
+    if (ctx.signal?.aborted) {
+      return createEngineResponse({
+        engine: EXECUTION_ENGINES.RECOMMENDATION,
+        ok: false,
+        text: '',
+        error: 'recommendation_aborted',
+      });
+    }
 
-  const built = await buildRecommendationAnswer(ctx.userMessage || '', {
-    companies,
-    dataText: ctx.priorDataText || null,
-    metric,
-    analyticsData: ctx.analyticsData || null,
-    peerData: ctx.peerData || null,
-    sectorData: ctx.sectorData || null,
-    fetchSector: true,
-  });
+    const companies = ctx.executionPlan?.entities
+      || ctx.classification?.entities
+      || [];
+    const metric = ctx.executionPlan?.metrics?.[0]
+      || ctx.classification?.metric
+      || ctx.analyticsData?.metric
+      || null;
 
-  const text = typeof built === 'string' ? built : built.text;
-  const grounding = typeof built === 'object' ? built.grounding : null;
-  const assumptions = typeof built === 'object' ? (built.assumptions || []) : [];
-  const companySpecific = Boolean(grounding?.companySpecific);
+    const built = await buildRecommendationAnswer(ctx.userMessage || '', {
+      companies,
+      dataText: ctx.priorDataText || null,
+      metric,
+      analyticsData: ctx.analyticsData || null,
+      peerData: ctx.peerData || null,
+      sectorData: ctx.sectorData || null,
+      fetchSector: true,
+      signal: ctx.signal || null,
+    });
 
-  return createEngineResponse({
-    engine: EXECUTION_ENGINES.RECOMMENDATION,
-    ok: Boolean(text),
-    text,
-    recommendations: text,
-    dataText: text,
-    assumptions,
-    dataset: grounding?.facts?.length
-      ? { facts: grounding.facts, companySpecific }
-      : null,
-    confidence: companySpecific ? 0.85 : (ctx.priorDataText ? 0.6 : 0.5),
-  });
+    const text = typeof built === 'string' ? built : built.text;
+    const grounding = typeof built === 'object' ? built.grounding : null;
+    const assumptions = typeof built === 'object' ? (built.assumptions || []) : [];
+    const companySpecific = Boolean(grounding?.companySpecific);
+
+    return createEngineResponse({
+      engine: EXECUTION_ENGINES.RECOMMENDATION,
+      ok: Boolean(text),
+      text: text || '',
+      recommendations: text || '',
+      dataText: text || '',
+      assumptions,
+      dataset: grounding?.facts?.length
+        ? { facts: grounding.facts, companySpecific }
+        : null,
+      confidence: companySpecific ? 0.85 : (ctx.priorDataText ? 0.6 : 0.5),
+    });
+  } catch (err) {
+    return createEngineResponse({
+      engine: EXECUTION_ENGINES.RECOMMENDATION,
+      ok: false,
+      text: '',
+      error: String(err?.message || err || 'recommendation_failed'),
+    });
+  }
 }
