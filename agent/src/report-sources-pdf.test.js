@@ -1,9 +1,15 @@
 /**
  * PDF citation URL resolution — prefer local files; never expose dead NSE links.
+ *
+ * Uses a temp PDF_DIR fixture so CI (no gitignored data/pdf/) still exercises
+ * local-path preference over NSE / HF fallbacks.
  */
 
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
   resolvePdfUrlForRow,
   findLocalPdfForReport,
@@ -11,7 +17,33 @@ import {
   LOCAL_PDF_MOUNT,
 } from './report-sources.js';
 
+const INFY_2025_NAME =
+  'Infosys_03072025215225_Infosys_Integrated_Annual_Report_2024-25.pdf';
+const INFY_2026_NAME = 'BRSR_500209_10062026191217.pdf';
+
 describe('local PDF resolution for Infosys', () => {
+  let fixtureRoot;
+  let prevPdfDir;
+
+  before(() => {
+    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'esg-pdf-fixture-'));
+    const y2025 = path.join(fixtureRoot, '2025', 'INFY');
+    const y2026 = path.join(fixtureRoot, '2026', 'INFY');
+    fs.mkdirSync(y2025, { recursive: true });
+    fs.mkdirSync(y2026, { recursive: true });
+    fs.writeFileSync(path.join(y2025, INFY_2025_NAME), '%PDF-1.4 fixture\n');
+    fs.writeFileSync(path.join(y2026, INFY_2026_NAME), '%PDF-1.4 fixture\n');
+
+    prevPdfDir = process.env.PDF_DIR;
+    process.env.PDF_DIR = fixtureRoot;
+  });
+
+  after(() => {
+    if (prevPdfDir === undefined) delete process.env.PDF_DIR;
+    else process.env.PDF_DIR = prevPdfDir;
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  });
+
   it('finds 2025 Infosys local PDF even when DB pdf_url basename is wrong', () => {
     const local = findLocalPdfForReport({
       year: 2025,
@@ -19,11 +51,11 @@ describe('local PDF resolution for Infosys', () => {
       // Wrong basename (2026 filing) — still present on some DB rows.
       pdfUrl: 'https://nsearchives.nseindia.com/corporate/BRSR_500209_10062026191217.pdf',
       altPdfUrls: [
-        'https://nsearchives.nseindia.com/corporate/Infosys_03072025215225_Infosys_Integrated_Annual_Report_2024-25.pdf',
+        `https://nsearchives.nseindia.com/corporate/${INFY_2025_NAME}`,
       ],
     });
     assert.ok(local);
-    assert.match(local, /Infosys_03072025215225_Infosys_Integrated_Annual_Report_2024-25\.pdf$/i);
+    assert.match(local, new RegExp(`${INFY_2025_NAME.replace(/\./g, '\\.')}$`, 'i'));
   });
 
   it('resolvePdfUrlForRow returns /local-pdf for Infosys 2025', () => {
@@ -44,7 +76,7 @@ describe('local PDF resolution for Infosys', () => {
       company: 'Infosys Limited',
       year: 2026,
       filename: 'BRSR_500209_1062026191217_BRSR_WebXMLFile_20260610_191246055.xml',
-      pdf_url: 'https://nsearchives.nseindia.com/corporate/BRSR_500209_10062026191217.pdf',
+      pdf_url: `https://nsearchives.nseindia.com/corporate/${INFY_2026_NAME}`,
     });
     assert.ok(url);
     assert.ok(url.startsWith(`${LOCAL_PDF_MOUNT}/2026/`));
@@ -56,19 +88,19 @@ describe('local PDF resolution for Infosys', () => {
       company: 'Infosys Limited',
       year: 2026,
       filename: 'BRSR_500209_1062026191217_BRSR_WebXMLFile_20260610_191246055.xml',
-      pdf_url: 'https://nsearchives.nseindia.com/corporate/BRSR_500209_10062026191217.pdf',
+      pdf_url: `https://nsearchives.nseindia.com/corporate/${INFY_2026_NAME}`,
       metric_pages_json: JSON.stringify({ scope1_emissions: 164 }),
       scope1_emissions: 11483,
     });
     const text = [
       'Scope 1 Emissions: 11,483 tons p. 164 [source](' + pdfUrl + '#page=164)',
       '',
-      'For further details, you can refer to the full report [here](https://nsearchives.nseindia.com/corporate/BRSR_500209_10062026191217.pdf).',
+      `For further details, you can refer to the full report [here](https://nsearchives.nseindia.com/corporate/${INFY_2026_NAME}).`,
     ].join('\n');
     const out = upgradeReportCitations(text, [{
       company: 'Infosys Limited',
       year: 2026,
-      pdf_url: 'https://nsearchives.nseindia.com/corporate/BRSR_500209_10062026191217.pdf',
+      pdf_url: `https://nsearchives.nseindia.com/corporate/${INFY_2026_NAME}`,
       filename: 'BRSR_500209_1062026191217_BRSR_WebXMLFile_20260610_191246055.xml',
       metric_pages_json: JSON.stringify({ scope1_emissions: 164 }),
       scope1_emissions: 11483,
