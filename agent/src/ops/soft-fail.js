@@ -16,6 +16,7 @@ export const SOFT_FAIL_ENGINES = new Set([
  */
 export function shouldOmitFromComposition(result) {
   if (!result) return true;
+  if (result.softOmitted) return true;
   const engine = result.engine;
   const notRequired = typeof result.error === 'string' && /_not_required$/.test(result.error);
   if (notRequired) return true;

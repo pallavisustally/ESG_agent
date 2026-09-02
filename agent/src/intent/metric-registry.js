@@ -60,6 +60,8 @@ export const METRIC_REGISTRY = [
       'women employees',
       'number of female employees',
       'how many female employees',
+      'how many male and female employees',
+      'male and female employees',
     ],
     unsupportedQualifiers: ['disabled', 'pwd', 'differently_abled'],
     sql: { column: 'female_employee_count' },

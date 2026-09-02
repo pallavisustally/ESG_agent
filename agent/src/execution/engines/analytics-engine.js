@@ -8,6 +8,9 @@ import { runHybridWhy, shouldRunHybridWhy } from '../../pipeline/hybrid-why.js';
 import { createEngineResponse } from '../engine-response.js';
 import { toolPlanFromExecutionPlan } from '../tool-plan-from-execution.js';
 import { EXECUTION_ENGINES } from '../execution-plan.js';
+import {
+  buildNoDataAnswer,
+} from '../../answers/no-data-template.js';
 
 /**
  * @param {object} ctx
@@ -94,11 +97,37 @@ export async function runAnalyticsEngine(ctx = {}) {
       });
     }
 
+    // Pure metric miss → honest no-data stub; orchestrator may add PDF excerpts.
+    if (sqlResult?.error === 'metric_not_in_sql') {
+      const noData = buildNoDataAnswer({
+        company: sqlResult.data?.resolvedCompany,
+        companies: executionPlan.entities,
+        metric: sqlResult.data?.metric || executionPlan.metrics?.[0] || ctx.classification?.metric,
+        year: sqlResult.data?.year || executionPlan.years?.[0],
+        userMessage: ctx.userMessage,
+      });
+      return createEngineResponse({
+        engine: EXECUTION_ENGINES.ANALYTICS,
+        ok: true,
+        text: noData,
+        dataText: noData,
+        data: { ...(sqlResult.data || {}), noData: true },
+        confidence: 0.55,
+        memoryUpdate: sqlResult.memoryUpdate || null,
+        error: 'metric_not_in_sql',
+      });
+    }
+
     return createEngineResponse({
       engine: EXECUTION_ENGINES.ANALYTICS,
       ok: false,
       text: sqlResult?.text
-        || 'I could not retrieve verified company metrics for that request.',
+        || buildNoDataAnswer({
+          companies: executionPlan.entities,
+          metric: executionPlan.metrics?.[0] || ctx.classification?.metric,
+          year: executionPlan.years?.[0],
+          userMessage: ctx.userMessage,
+        }),
       data: sqlResult || null,
       error: sqlResult?.error || 'analytics_failed',
       confidence: 0.2,

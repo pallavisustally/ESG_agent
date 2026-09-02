@@ -166,6 +166,8 @@ describe('knowledge / compliance / document engines', () => {
     const text = buildKnowledgeAnswer('What is a metric?');
     assert.match(text, /metric/i);
     assert.match(text, /measurable indicator/i);
+    assert.doesNotMatch(text, /This Copilot can look up/i);
+    assert.doesNotMatch(text, /ESG knowledge answer/i);
   });
 
   it('unknown concept returns clarification (not company redirect)', () => {

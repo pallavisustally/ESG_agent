@@ -14,7 +14,6 @@
 import { INTENTS } from '../intent/classify-intent.js';
 import {
   METRIC_RESOLUTION,
-  looksLikeMetricQuestion,
   COMPANY_METRIC_UNAVAILABLE_RESPONSE,
 } from '../intent/metric-resolution.js';
 import { getReportSourceRow, getCompanyList } from '../db.js';
@@ -33,6 +32,11 @@ import {
   DEFAULT_MIN_ACCEPT,
 } from '../retrieval/confidence-retrieval.js';
 import { attachReportPdfVisualization } from '../answers/response-media.js';
+import { limitPriorCompaniesForMessage } from '../intent/conversation-context.js';
+import {
+  buildNoDataAnswer,
+  wantsDocumentEvidence,
+} from '../answers/no-data-template.js';
 
 const DEFAULT_DOCUMENT_FALLBACK_MAX_COMPANIES = 3;
 const ABS_DOCUMENT_FALLBACK_MAX_COMPANIES = 20;
@@ -81,19 +85,52 @@ export function isSqlDocumentFallbackEnabled() {
   return flag === '1' || /^true$/i.test(flag);
 }
 
-export function companyMetricUnavailableResponse(company = null, year = null) {
-  if (company) {
-    return year
-      ? `The requested metric is not available in this company's BRSR report (**${company}**, ${year}).`
-      : `The requested metric is not available in this company's BRSR report (**${company}**).`;
-  }
-  return COMPANY_METRIC_UNAVAILABLE_RESPONSE;
+export function companyMetricUnavailableResponse(company = null, year = null, extra = {}) {
+  return buildNoDataAnswer({
+    company,
+    year,
+    metric: extra.metric,
+    userMessage: extra.userMessage,
+  }) || COMPANY_METRIC_UNAVAILABLE_RESPONSE;
+}
+
+const FALLBACK_STOPWORDS = new Set([
+  'what', 'this', 'that', 'with', 'from', 'have', 'been', 'were', 'they',
+  'them', 'above', 'company', 'companies', 'count', 'number', 'many', 'much',
+  'please', 'show', 'tell', 'about', 'requested', 'metric', 'limited',
+  'healthcare', 'which', 'does', 'give', 'find', 'list', 'their', 'there',
+]);
+
+/** Distinctive tokens from the metric ask — used to reject off-topic PDF pages. */
+export function queryTopicTokens(query = '', metric = null) {
+  const extra = String(metric || '').replace(/_/g, ' ');
+  const words = `${query} ${extra}`.toLowerCase().match(/[a-z]{4,}/g) || [];
+  return [...new Set(words.filter((w) => !FALLBACK_STOPWORDS.has(w)))];
+}
+
+function blobMatchesTopic(blob, tokens) {
+  if (!tokens.length) return true;
+  const t = String(blob || '').toLowerCase();
+  return tokens.some((tok) => t.includes(tok));
+}
+
+/** Keep only hits whose snippet actually mentions the asked topic. */
+export function hitsOnTopic(hits, query, metric) {
+  const tokens = queryTopicTokens(query, metric);
+  const list = Array.isArray(hits) ? hits : [];
+  if (!tokens.length) return list;
+  return list.filter((h) => blobMatchesTopic(h?.snippet || h?.text || '', tokens));
 }
 
 /**
  * Resolve company hints for fallback (classification entities / memory / SQL data).
  */
-export function resolveFallbackCompanies(classification = null, memory = null, sqlData = null) {
+export function resolveFallbackCompanies(
+  classification = null,
+  memory = null,
+  sqlData = null,
+  userMessage = '',
+) {
   const fromSql = sqlData?.resolvedCompany ? [sqlData.resolvedCompany] : [];
   const fromClass = Array.isArray(classification?.entities) ? classification.entities : [];
   const fromMemory = Array.isArray(memory?.lastCompanies) && memory.lastCompanies.length
@@ -102,10 +139,12 @@ export function resolveFallbackCompanies(classification = null, memory = null, s
   const filtersCompany = classification?.filters?.resolvedCompany
     ? [classification.filters.resolvedCompany]
     : [];
-  const merged = [...fromSql, ...fromClass, ...filtersCompany, ...fromMemory]
+  const named = [...fromSql, ...fromClass, ...filtersCompany]
     .map((c) => String(c || '').trim())
     .filter(Boolean);
-  return [...new Set(merged)].slice(0, getDocumentFallbackMaxCompanies());
+  const merged = named.length ? named : fromMemory.map((c) => String(c || '').trim()).filter(Boolean);
+  return limitPriorCompaniesForMessage(userMessage, [...new Set(merged)], memory)
+    .slice(0, getDocumentFallbackMaxCompanies());
 }
 
 export function resolveFallbackYear(classification = null, memory = null, sqlData = null) {
@@ -149,15 +188,10 @@ export function isCompanyScopedDocumentFallbackEligible({
 
   if (!companyScopedIntent) return false;
 
-  const hasMetric = Boolean(
-    classification?.metric
-    || classification?.filters?.metric
-    || plan?.metric,
-  );
-
-  if (unsupported || hasMetric) return true;
-  if (looksLikeMetricQuestion(userMessage)) return true;
-  return intent === INTENTS.METRIC_LOOKUP || intent === INTENTS.REPORT_LOOKUP;
+  // Number asks stay on the short SQL/no-data path. Open the filing only when
+  // the user asked for the report/PDF, or this is an explicit report lookup.
+  if (intent === INTENTS.REPORT_LOOKUP) return true;
+  return wantsDocumentEvidence(userMessage, plan);
 }
 
 function metricLabel(metric) {
@@ -171,28 +205,17 @@ function formatPdfFallbackAnswer({
   year,
   pdfUrl,
   hits,
-  query,
   metric,
 }) {
-  const lines = [
-    `### BRSR PDF excerpt — ${company}${year ? ` (${year})` : ''}`,
-    '',
-    `Structured SQL did not return **${metricLabel(metric)}** for this company. `
-      + 'The following is from that company\'s BRSR PDF only (not a cross-company search):',
-    '',
-  ];
-  for (const hit of hits.slice(0, 3)) {
-    lines.push(`- **Page ${hit.page}**: ${hit.snippet}`);
-  }
-  if (pdfUrl) {
-    const page = hits[0]?.page;
-    const href = page ? `${pdfUrl}#page=${page}` : pdfUrl;
-    lines.push('', `PDF: [source${page ? ` p.${page}` : ''}](${href})`);
-  }
-  if (query) {
-    lines.push('', `_Matched query terms against the resolved company report for “${query}”._`);
-  }
-  return lines.join('\n');
+  const hit = hits[0];
+  const snippet = String(hit?.snippet || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+  const page = hit?.page;
+  const href = pdfUrl ? (page ? `${pdfUrl}#page=${page}` : pdfUrl) : null;
+  const source = href ? ` [p.${page}](${href})` : (page ? ` (page ${page})` : '');
+  return [
+    `No structured **${metricLabel(metric)}** for **${company}**${year ? ` (${year})` : ''}.`,
+    snippet ? `PDF note${source}: ${snippet}${snippet.length >= 180 ? '…' : ''}` : null,
+  ].filter(Boolean).join(' ');
 }
 
 /**
@@ -259,16 +282,20 @@ export async function tryCompanyDocumentFallback({
     return { ok: true, text: narrative.message, source: 'clarify', data: narrative, confidence: 1, attempts };
   }
 
-  if (narrative.chunks?.length) {
+  const topicQuery = query || metricLabel(metric);
+  const topicTokens = queryTopicTokens(topicQuery, metric);
+  const topicChunks = (narrative.chunks || []).filter((c) => blobMatchesTopic(c.text, topicTokens));
+
+  if (topicChunks.length) {
     const ragValidation = validateEvidence({
-      chunks: narrative.chunks,
+      chunks: topicChunks,
       company: narrative.company || company,
       minChunks: 1,
     });
     const narrativeScore = scoreNarrativeConfidence({
-      chunks: narrative.chunks,
+      chunks: topicChunks,
       company: narrative.company || company,
-      query: query || metricLabel(metric),
+      query: topicQuery,
     });
     attempts.push({
       source: 'narrative',
@@ -281,8 +308,8 @@ export async function tryCompanyDocumentFallback({
         company: narrative.company || company,
         year: narrative.year ?? year,
         pdf_url: narrative.pdf_url,
-        chunks: narrative.chunks,
-        query: query || metricLabel(metric),
+        chunks: topicChunks,
+        query: topicQuery,
       });
       const text = attachReportPdfVisualization(rawText, {
         company: narrative.company || company,
@@ -296,7 +323,7 @@ export async function tryCompanyDocumentFallback({
         source: 'narrative',
         company: narrative.company || company,
         year: narrative.year ?? year,
-        data: { chunks: narrative.chunks, pdf_url: narrative.pdf_url },
+        data: { chunks: topicChunks, pdf_url: narrative.pdf_url },
         confidence: narrativeScore.confidence,
         attempts,
       };
@@ -339,7 +366,7 @@ export async function tryCompanyDocumentFallback({
       reason: 'no_report_row',
       company,
       year: reportYear,
-      text: companyMetricUnavailableResponse(company, reportYear),
+      text: companyMetricUnavailableResponse(company, reportYear, { metric, userMessage: query }),
       confidence: 0,
       attempts,
     };
@@ -357,7 +384,7 @@ export async function tryCompanyDocumentFallback({
       reason: 'no_pdf',
       company: row.company,
       year: row.year,
-      text: companyMetricUnavailableResponse(row.company, row.year),
+      text: companyMetricUnavailableResponse(row.company, row.year, { metric, userMessage: query }),
       confidence: 0,
       attempts,
     };
@@ -370,15 +397,17 @@ export async function tryCompanyDocumentFallback({
     minScore: 8,
   });
 
+  const onTopicHits = hitsOnTopic(search.hits, topicQuery, metric);
+
   onProgress?.({
     status: 'tool_end',
     tool: 'document_fallback_pdf',
-    message: search.hits?.length
-      ? `Found ${search.hits.length} PDF page hit(s).`
+    message: onTopicHits.length
+      ? `Found ${onTopicHits.length} on-topic PDF page hit(s).`
       : 'No matching PDF pages.',
   });
 
-  const pdfScore = scorePdfConfidence({ hits: search.hits || [] });
+  const pdfScore = scorePdfConfidence({ hits: onTopicHits });
   attempts.push({
     source: 'pdf',
     confidence: pdfScore.confidence,
@@ -386,19 +415,18 @@ export async function tryCompanyDocumentFallback({
     bestScore: pdfScore.bestScore,
   });
 
-  if (search.hits?.length && shouldAcceptRetrieval(pdfScore.confidence, { minAccept })) {
+  if (onTopicHits.length && shouldAcceptRetrieval(pdfScore.confidence, { minAccept })) {
     const rawText = formatPdfFallbackAnswer({
       company: row.company,
       year: row.year,
       pdfUrl,
-      hits: search.hits,
-      query,
+      hits: onTopicHits,
       metric,
     });
     const text = attachReportPdfVisualization(rawText, {
       company: row.company,
       year: row.year,
-      userMessage: query || metricLabel(metric),
+      userMessage: topicQuery,
       fromPdf: true,
     });
     return {
@@ -407,7 +435,7 @@ export async function tryCompanyDocumentFallback({
       source: 'pdf',
       company: row.company,
       year: row.year,
-      data: { pdf_url: pdfUrl, hits: search.hits, scannedAllPages: search.scannedAllPages },
+      data: { pdf_url: pdfUrl, hits: onTopicHits, scannedAllPages: search.scannedAllPages },
       confidence: pdfScore.confidence,
       attempts,
     };
@@ -424,7 +452,7 @@ export async function tryCompanyDocumentFallback({
     reason: pdfScore.confidence > 0 ? 'pdf_low_confidence' : 'not_found',
     company: row.company,
     year: row.year,
-    text: companyMetricUnavailableResponse(row.company, row.year),
+    text: companyMetricUnavailableResponse(row.company, row.year, { metric, userMessage: query }),
     confidence: Math.max(pdfScore.confidence, bestAttempt?.confidence || 0),
     attempts,
   };
@@ -444,7 +472,7 @@ export async function runSqlDocumentFallback({
   returnUnavailable = true,
   deps = null,
 } = {}) {
-  const companies = resolveFallbackCompanies(classification, memory, sqlData);
+  const companies = resolveFallbackCompanies(classification, memory, sqlData, userMessage);
   if (!isCompanyScopedDocumentFallbackEligible({
     classification,
     plan,
@@ -498,7 +526,7 @@ export async function runSqlDocumentFallback({
   if (anyOk) {
     return {
       handled: true,
-      text: parts.join('\n\n---\n\n'),
+      text: parts.join('\n\n'),
       source: 'document_fallback',
       forbidLlmFallback: true,
     };
@@ -508,7 +536,10 @@ export async function runSqlDocumentFallback({
 
   return {
     handled: true,
-    text: companyMetricUnavailableResponse(lastFail.company, lastFail.year),
+    text: companyMetricUnavailableResponse(lastFail.company, lastFail.year, {
+      metric,
+      userMessage,
+    }),
     source: 'unavailable',
     company: lastFail.company,
     year: lastFail.year,

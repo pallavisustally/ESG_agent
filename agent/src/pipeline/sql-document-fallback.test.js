@@ -16,7 +16,9 @@ import {
   resolveFallbackCompanies,
   tryCompanyDocumentFallback,
   runSqlDocumentFallback,
+  hitsOnTopic,
 } from './sql-document-fallback.js';
+import { buildNoDataAnswer } from '../answers/no-data-template.js';
 
 describe('sql-document-fallback config', () => {
   const prevFlag = process.env.SQL_DOCUMENT_FALLBACK;
@@ -73,7 +75,7 @@ describe('sql-document-fallback config', () => {
     assert.deepEqual(companies, ['A Ltd', 'B Ltd']);
   });
 
-  it('allows company metric lookup', () => {
+  it('skips PDF for unsupported number asks', () => {
     process.env.SQL_DOCUMENT_FALLBACK = 'true';
     assert.equal(
       isCompanyScopedDocumentFallbackEligible({
@@ -84,6 +86,34 @@ describe('sql-document-fallback config', () => {
         },
         companies: ['Infosys Limited'],
         userMessage: 'plastic footprint of Infosys',
+      }),
+      false,
+    );
+  });
+
+  it('allows SQL miss excerpts only when the user asks for the report', () => {
+    process.env.SQL_DOCUMENT_FALLBACK = 'true';
+    assert.equal(
+      isCompanyScopedDocumentFallbackEligible({
+        classification: {
+          intent: INTENTS.METRIC_LOOKUP,
+          metric: 'scope1_emissions',
+          metricResolution: METRIC_RESOLUTION.FOUND,
+        },
+        companies: ['Infosys Limited'],
+        userMessage: 'Scope 1 for Infosys',
+      }),
+      false,
+    );
+    assert.equal(
+      isCompanyScopedDocumentFallbackEligible({
+        classification: {
+          intent: INTENTS.METRIC_LOOKUP,
+          metric: 'scope1_emissions',
+          metricResolution: METRIC_RESOLUTION.FOUND,
+        },
+        companies: ['Infosys Limited'],
+        userMessage: 'Show Scope 1 from the Infosys BRSR PDF',
       }),
       true,
     );
@@ -268,9 +298,8 @@ describe('SQL → Narrative → PDF fallback regression', () => {
     assert.equal(result.source, 'pdf');
     assert.equal(calls.pdf, 1);
     assert.equal(result.data.scannedAllPages, true);
-    assert.match(result.text, /Page 42/);
+    assert.match(result.text, /p\.42|#page=42/);
     assert.match(result.text, /Plastic footprint disclosure/);
-    assert.match(result.text, /#page=42/);
   });
 
   it('returns company-scoped unavailable when narrative and PDF both miss', async () => {
@@ -290,7 +319,7 @@ describe('SQL → Narrative → PDF fallback regression', () => {
 
     assert.equal(result.ok, false);
     assert.equal(result.reason, 'not_found');
-    assert.match(result.text, /not available in this company's BRSR report/);
+    assert.match(result.text, /not in the BRSR tables/);
     assert.match(result.text, /Infosys Limited/);
   });
 
@@ -306,7 +335,7 @@ describe('SQL → Narrative → PDF fallback regression', () => {
       },
       plan: { intent: INTENTS.METRIC_LOOKUP, strategy: 'unsupported_metric', metric: null },
       sqlData: { resolvedCompany: 'Infosys Limited', year: 2025 },
-      userMessage: 'What is the plastic footprint of Infosys in 2025?',
+      userMessage: 'What is the plastic footprint of Infosys in the 2025 BRSR PDF?',
       returnUnavailable: true,
       deps: baseDeps({
         retrieveNarrative: async () => {
@@ -335,7 +364,7 @@ describe('SQL → Narrative → PDF fallback regression', () => {
     assert.equal(result.handled, true);
     assert.equal(result.source, 'pdf');
     assert.deepEqual(order, ['narrative', 'pdf']);
-    assert.match(result.text, /Page 7/);
+    assert.match(result.text, /p\.7|#page=7|Page 7/);
   });
 
   it('runSqlDocumentFallback prefers narrative over PDF when both could match', async () => {
@@ -350,7 +379,7 @@ describe('SQL → Narrative → PDF fallback regression', () => {
         filters: { unsupportedMetric: true, years: [2025] },
       },
       plan: { strategy: 'unsupported_metric' },
-      userMessage: 'plastic footprint Infosys',
+      userMessage: 'plastic footprint Infosys from the BRSR filing',
       deps: baseDeps({
         retrieveNarrative: async () => {
           order.push('narrative');
@@ -391,5 +420,65 @@ describe('SQL → Narrative → PDF fallback regression', () => {
       returnUnavailable: true,
     });
     assert.equal(result, null);
+  });
+
+  it('runSqlDocumentFallback skips number asks without report/PDF keywords', async () => {
+    process.env.SQL_DOCUMENT_FALLBACK = 'true';
+    const result = await runSqlDocumentFallback({
+      classification: {
+        intent: INTENTS.METRIC_LOOKUP,
+        entities: ['Infosys Limited'],
+        metricResolution: METRIC_RESOLUTION.UNSUPPORTED,
+        filters: { unsupportedMetric: true },
+      },
+      plan: { intent: INTENTS.METRIC_LOOKUP, strategy: 'unsupported_metric' },
+      userMessage: 'what is the count of disabled female workers in above company',
+      returnUnavailable: true,
+      deps: baseDeps(),
+    });
+    assert.equal(result, null);
+  });
+
+  it('rejects off-topic PDF pages for a disabled-worker count ask', async () => {
+    const result = await tryCompanyDocumentFallback({
+      companyHint: 'Infosys',
+      year: 2025,
+      query: 'what is the count of disabled female workers in above company',
+      deps: baseDeps({
+        searchPdf: async () => ({
+          hits: [{
+            page: 12,
+            score: 20,
+            snippet: 'Does the entity have an anti-corruption or anti-bribery policy? The Company is committed.',
+          }],
+          scannedAllPages: true,
+        }),
+      }),
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.text, /not in the BRSR tables/);
+    assert.doesNotMatch(result.text, /anti-corruption/i);
+  });
+});
+
+describe('short no-data answers', () => {
+  it('suggests female employee count for disabled female workers', () => {
+    const text = buildNoDataAnswer({
+      company: 'Aster DM Healthcare Limited',
+      userMessage: 'what is the count of disabled female workers in above company',
+    });
+    assert.match(text, /Aster DM Healthcare Limited/);
+    assert.match(text, /female employee count/);
+    assert.ok(text.split('\n').length <= 2);
+    assert.ok(text.length < 280);
+  });
+
+  it('hitsOnTopic drops anti-corruption pages for a PwD ask', () => {
+    const kept = hitsOnTopic(
+      [{ page: 12, snippet: 'anti-corruption or anti-bribery policy. Case Details NA' }],
+      'what is the count of disabled female workers in above company',
+      null,
+    );
+    assert.deepEqual(kept, []);
   });
 });

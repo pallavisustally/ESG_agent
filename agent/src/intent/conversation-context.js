@@ -41,6 +41,29 @@ export function getPriorCompanyList(memory = null) {
   return [];
 }
 
+/** True when the user points at one prior company, not the whole list. */
+export function refersToSingularPriorCompany(text = '') {
+  const t = String(text || '');
+  if (/\bcompanies\b/i.test(t)) return false;
+  return /\b(the\s+)?(above|previous|same|this)\s+company\b/i.test(t);
+}
+
+/**
+ * "Above company" (singular) → one name. "Above companies" → the stored list.
+ */
+export function limitPriorCompaniesForMessage(userMessage = '', companies = [], memory = null) {
+  const list = (Array.isArray(companies) ? companies : []).map((c) => String(c || '').trim()).filter(Boolean);
+  if (list.length <= 1) return list;
+  if (!refersToSingularPriorCompany(userMessage)) return list;
+  const resolved = String(memory?.resolvedCompany || '').trim();
+  if (resolved) {
+    const hit = list.find((c) => c.toLowerCase() === resolved.toLowerCase());
+    if (hit) return [hit];
+    return [resolved];
+  }
+  return [list[0]];
+}
+
 export function hasPriorCompanyList(memory = null) {
   return getPriorCompanyList(memory).length > 0;
 }
@@ -60,7 +83,11 @@ export function validatePriorCompanyReference(userMessage = '', memory = null) {
     };
   }
 
-  const companies = getPriorCompanyList(memory);
+  const companies = limitPriorCompaniesForMessage(
+    userMessage,
+    getPriorCompanyList(memory),
+    memory,
+  );
   if (companies.length) {
     return {
       ok: true,

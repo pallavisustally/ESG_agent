@@ -6,6 +6,7 @@
  */
 
 import { INTENTS } from '../intent/classify-intent.js';
+import { buildNoDataAnswer } from './no-data-template.js';
 
 /** Intents whose facts must come from SQL — LLM must not fabricate substitutes. */
 export const STRUCTURED_SQL_INTENTS = new Set([
@@ -17,15 +18,18 @@ export const STRUCTURED_SQL_INTENTS = new Set([
   INTENTS.COMPARE_COMPANIES,
   INTENTS.SECTOR_SUMMARY,
   INTENTS.PAGINATE_CONTINUE,
+  INTENTS.METRIC_LOOKUP,
+  INTENTS.TREND_ANALYSIS,
+  INTENTS.CHART_REQUEST,
 ]);
 
 /**
- * Soft LLM handoff is allowed only for company-resolved lookups (tools still ground facts).
+ * Soft LLM handoff is allowed only for company-resolved report/summary asks
+ * (tools still ground facts). Pure metric lookup stays SQL / honest no-data.
  */
 export function isAllowedLlmHandoff(intent, sqlResult = null) {
   if (!sqlResult || sqlResult.error !== 'handoff_llm') return false;
-  const lookup = intent === INTENTS.METRIC_LOOKUP
-    || intent === INTENTS.REPORT_LOOKUP
+  const lookup = intent === INTENTS.REPORT_LOOKUP
     || intent === INTENTS.COMPANY_SUMMARY;
   return lookup && Boolean(sqlResult.data?.resolvedCompany);
 }
@@ -52,9 +56,19 @@ export function explainSqlFailure({
   companies = [],
   year = null,
   sector = null,
+  userMessage = '',
 } = {}) {
   const err = String(error || '');
   const dbFailure = /ENOTFOUND|ECONNREFUSED|timeout|database|postgres|SQLITE|could not be queried/i.test(err);
+
+  if (err === 'metric_not_in_sql') {
+    return buildNoDataAnswer({
+      companies,
+      metric,
+      year,
+      userMessage,
+    });
+  }
   const scope = [
     metric ? metricLabel(metric) : null,
     year ? `for ${year}` : null,

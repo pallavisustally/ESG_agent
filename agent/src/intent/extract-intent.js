@@ -18,6 +18,7 @@ import {
   isInformationalQuestion,
   isFollowUpExplanation,
   isAnaphoricMetricLookup,
+  looksLikeCompanyCountAsk,
 } from './classify-intent.js';
 import {
   CANONICAL_INTENTS,
@@ -411,16 +412,23 @@ function annotateRulesClassification(classification) {
 
 /**
  * Prefer LLM when it is more confident / resolves UNKNOWN; otherwise keep rules.
+ * @param {object} rulesResult
+ * @param {object|null} llmResult
+ * @param {string} [userMessage]
  */
-export function mergeIntentResults(rulesResult, llmResult) {
+export function mergeIntentResults(rulesResult, llmResult, userMessage = '') {
   const rules = annotateRulesClassification(rulesResult);
   if (!llmResult) return rules;
 
+  const countAsk = rules.intent === INTENTS.COUNT_COMPANIES
+    || looksLikeCompanyCountAsk(userMessage);
+
   // Code safety wins for guidance / pagination / anaphoric metric lookups / unsupported metrics /
-  // missing prior-company context.
+  // missing prior-company context / company-count discovery asks.
   if (
     rules.intent === INTENTS.HOW_TO
     || rules.intent === INTENTS.PAGINATE_CONTINUE
+    || countAsk
     || rules.metricResolution === METRIC_RESOLUTION.UNSUPPORTED
     || rules.filters?.unsupportedMetric
     || rules.filters?.needsPriorCompanies
@@ -428,6 +436,26 @@ export function mergeIntentResults(rulesResult, llmResult) {
     || rules.metricResolution === METRIC_RESOLUTION.DERIVED
     || (rules.filters?.followUpCompanies && rules.metric && rules.confidence >= 0.9)
   ) {
+    if (countAsk) {
+      const years = rules.filters?.years?.length
+        ? rules.filters.years
+        : (llmResult.filters?.years || undefined);
+      return {
+        ...rules,
+        intent: INTENTS.COUNT_COMPANIES,
+        canonicalIntent: 'COUNT',
+        entities: [],
+        metric: null,
+        metrics: [],
+        clarification: null,
+        filters: {
+          metricResolution: METRIC_RESOLUTION.NONE,
+          ...(years ? { years } : {}),
+        },
+        extraction: llmResult.extraction,
+        source: rules.source || 'rules',
+      };
+    }
     return {
       ...rules,
       entities: rules.filters?.needsPriorCompanies
@@ -553,7 +581,7 @@ export async function extractIntentAndEntities(userMessage, memory = null, opts 
 
   const raw = await callIntentLlm(userMessage, memory, { signal: opts.signal });
   const llm = llmExtractionToClassification(raw, userMessage, memory);
-  const merged = mergeIntentResults(rules, llm);
+  const merged = mergeIntentResults(rules, llm, userMessage);
   const finalized = await finalizeEntityPrecedence(merged, userMessage, memory, opts);
 
   logAgentEvent({

@@ -66,43 +66,94 @@ export function composeCapabilityResults(results = [], opts = {}) {
 
   if (rendered.length === 1) {
     return {
-      text: dedupeChartBlocks(String(rendered[0].text).trim()),
+      text: dedupeChartBlocks(applyTonePolish(String(rendered[0].text).trim(), rendered[0])),
       responseSource: CAPABILITY_META[rendered[0].capability]?.label || 'Copilot',
       capabilitiesUsed: [rendered[0].capability],
     };
   }
 
-  // Multi-capability: ordered sections with light headings (user-facing labels only).
   const ordered = [...rendered].sort(
     (a, b) => SECTION_ORDER.indexOf(a.capability) - SECTION_ORDER.indexOf(b.capability),
   );
 
-  const parts = [];
-  for (const r of ordered) {
-    parts.push(String(r.text).trim());
-  }
+  const dataCaps = new Set([
+    CAPABILITIES.ESG_KNOWLEDGE,
+    CAPABILITIES.ESG_COMPLIANCE,
+    CAPABILITIES.COMPANY_ANALYTICS,
+    CAPABILITIES.BENCHMARKING,
+    CAPABILITIES.COMPANY_REPORTS,
+  ]);
+  const adviceCaps = new Set([
+    CAPABILITIES.ESG_GUIDANCE,
+    CAPABILITIES.RECOMMENDATION,
+    CAPABILITIES.DOCUMENT_GENERATION,
+  ]);
 
-  let text = parts.join('\n\n---\n\n');
+  const dataParts = ordered
+    .filter((r) => dataCaps.has(r.capability))
+    .map((r) => stripComposerNoise(r.text));
+  const adviceParts = ordered
+    .filter((r) => adviceCaps.has(r.capability))
+    .map((r) => stripComposerNoise(r.text));
+  const leftover = ordered
+    .filter((r) => !dataCaps.has(r.capability) && !adviceCaps.has(r.capability))
+    .map((r) => stripComposerNoise(r.text));
+
+  const hybrid = dataParts.length > 0 && adviceParts.length > 0;
+  const parts = [];
+  if (hybrid) {
+    parts.push('Here is a combined view — verified company data first, then practical improvement suggestions.');
+  }
+  parts.push(...dataParts);
+  if (adviceParts.length) {
+    const adviceBody = adviceParts.join('\n\n');
+    if (!/^###\s/m.test(adviceBody)) {
+      parts.push('### What this means', '', adviceBody);
+    } else {
+      parts.push(adviceBody);
+    }
+  }
+  parts.push(...leftover);
+
+  let text = parts.filter(Boolean).join('\n\n');
   text = dedupeChartBlocks(text);
 
-  // Soft intro only for hybrid analytics + advice patterns.
-  const caps = setOf(ordered.map((r) => r.capability));
-  const hybrid = (caps.has(CAPABILITIES.COMPANY_ANALYTICS) || caps.has(CAPABILITIES.BENCHMARKING))
-    && (caps.has(CAPABILITIES.RECOMMENDATION) || caps.has(CAPABILITIES.ESG_GUIDANCE));
-  if (hybrid) {
-    text = [
-      'Here is a combined view — verified company data first, then practical improvement suggestions.',
-      '',
-      text,
-    ].join('\n');
-  }
-
   return {
-    text,
+    text: applyTonePolish(text, ordered[0]),
     responseSource: 'Copilot',
     capabilitiesUsed: ordered.map((r) => r.capability),
     multi: true,
   };
+}
+
+function stripComposerNoise(text) {
+  return String(text || '')
+    .replace(/^I found the following in verified BRSR data:\s*/i, '')
+    .trim();
+}
+
+/**
+ * Light positive framing — never rewrite numeric tables/cells.
+ */
+function applyTonePolish(text, result = null) {
+  const body = String(text || '').trim();
+  if (!body) return body;
+  // Already has a structured heading / table — leave facts intact.
+  if (/^###\s/m.test(body) || /^\|/m.test(body)) {
+    if (/could\s+\*\*not\*\*\s+find|could not find|not available/i.test(body)) {
+      return body; // no-data template already framed
+    }
+    if (
+      result?.capability === CAPABILITIES.COMPANY_ANALYTICS
+      || result?.capability === CAPABILITIES.BENCHMARKING
+    ) {
+      if (!/^I found\b/i.test(body) && !/^Here is\b/i.test(body)) {
+        return `I found the following in verified BRSR data:\n\n${body}`;
+      }
+    }
+    return body;
+  }
+  return body;
 }
 
 /**
@@ -159,8 +210,4 @@ export function sanitizeUserFacingText(text) {
     .replace(/\b(primaryTool|deterministic_sql|planQuery|routeTools)\b/gi, '')
     .replace(/\bSELECT\s+[\s\S]{0,200}?FROM\s+reports\b/gi, '[verified database result]')
     .trim();
-}
-
-function setOf(list) {
-  return new Set(list);
 }

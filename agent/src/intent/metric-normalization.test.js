@@ -38,6 +38,7 @@ describe('metric normalization engine — workforce', () => {
     ['women employees', 'female_employee_count'],
     ['female employees', 'female_employee_count'],
     ['female employee count', 'female_employee_count'],
+    ['how many male and female employes are working in infosys company', 'female_employee_count'],
     ['employee strength', 'total_employee_count'],
     ['male workforce', 'male_employee_share'],
     ['female employee share', 'female_employee_share'],

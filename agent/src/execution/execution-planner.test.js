@@ -98,6 +98,53 @@ describe('Execution Planner — capability routing parity', () => {
     );
     assert.equal(plan.executionStrategy, 'recommendation');
   });
+
+  it('metric ask without company → clarify (not invent)', () => {
+    const msg = 'What is their Scope 1 emissions?';
+    const { plan } = planFor(msg);
+    assert.equal(plan.needsClarification, true);
+    assert.equal(plan.executionStrategy, 'clarify');
+    assert.ok(plan.clarification);
+  });
+
+  it('unsupported count ask does not open the PDF', () => {
+    const memory = {
+      lastCompanies: ['Aster DM Healthcare Limited'],
+      resolvedCompany: 'Aster DM Healthcare Limited',
+    };
+    const msg = 'what is the count of disabled female workers in above company';
+    const { plan } = planFor(msg, memory);
+    assert.equal(plan.needsPdf, false);
+  });
+
+  it('report/PDF wording still opens the filing', () => {
+    const { plan } = planFor('Show Infosys Scope 1 from the BRSR PDF');
+    assert.equal(plan.needsPdf || plan.needsReport, true);
+  });
+
+  it('rankings still go analytics without a company', () => {
+    const msg = 'Top 5 companies by Scope 1 emissions';
+    const { plan } = planFor(msg);
+    assert.equal(plan.needsClarification, false);
+    assert.equal(plan.executionStrategy, 'analytics');
+    assert.equal(plan.needsSql, true);
+  });
+});
+
+describe('Execution Planner — legacy compare observe', () => {
+  it('knowledge parity still holds', () => {
+    const msg = 'What is ESG?';
+    const classification = classifyIntent(msg);
+    const capabilityPlan = planCapabilities(msg, classification, null);
+    const { plan } = planExecution({ userMessage: msg, classification });
+    const legacy = planQuery(classification);
+    const cmp = compareExecutionPlanToLegacy(plan, {
+      capabilityPlan,
+      plan: legacy,
+      classification,
+    });
+    assert.ok(cmp);
+  });
 });
 
 describe('Execution Planner — never executes side effects', () => {

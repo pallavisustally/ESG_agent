@@ -40,26 +40,26 @@ export const COMPARE_METRICS = [
 ];
 
 const METRIC_LABELS = {
-  scope1_emissions: 'Scope 1 emissions',
-  scope2_emissions: 'Scope 2 emissions',
-  scope3_emissions: 'Scope 3 emissions',
-  total_emissions: 'Total GHG (Scope 1+2+3)',
+  scope1_emissions: 'Scope 1 emissions (tCO2e)',
+  scope2_emissions: 'Scope 2 emissions (tCO2e)',
+  scope3_emissions: 'Scope 3 emissions (tCO2e)',
+  total_emissions: 'Total GHG Scope 1+2+3 (tCO2e)',
   emissions_intensity: 'Emissions intensity',
-  renewable_energy_share: 'Renewable energy share',
+  renewable_energy_share: 'Renewable energy share (%)',
   energy_consumption: 'Energy consumption',
   water_consumption: 'Water consumption',
   waste_generated: 'Waste generated',
   female_employee_count: 'Female employee count',
-  female_employee_share: 'Female employee share',
+  female_employee_share: 'Female employee share (%)',
   female_board_count: 'Female board count',
-  female_board_share: 'Female board share',
+  female_board_share: 'Female board share (%)',
   total_employee_count: 'Total employee count',
   total_revenue: 'Total revenue',
   safety_ltifr: 'Safety LTIFR',
   male_employee_count: 'Male employee count',
-  male_employee_share: 'Male employee share',
+  male_employee_share: 'Male employee share (%)',
   male_board_count: 'Male board count',
-  male_board_share: 'Male board share',
+  male_board_share: 'Male board share (%)',
 };
 
 function selectExpr(metric) {
@@ -329,10 +329,14 @@ export async function runCompanyCompare({
   let useMetrics = metrics.filter((m) => COMPARE_METRICS.includes(m));
   if (!useMetrics.length) {
     useMetrics = ['scope1_emissions', 'renewable_energy_share'];
+  } else if (useMetrics.length > 2 && !wantsChart) {
+    // Keep tables readable by default (year + units still shown per column).
+    useMetrics = useMetrics.slice(0, 2);
   }
 
   const companies = resolved.map((r) => r.company);
   const { rows, sql } = await fetchCompareRows({ companies, metrics: useMetrics, year });
+  // Issuer collapse already applied in fetchCompareRows (latest year per issuer when year unset).
   const { text } = formatCompareMarkdown({
     rows,
     metrics: useMetrics,

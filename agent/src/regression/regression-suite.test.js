@@ -21,6 +21,8 @@ import {
   shouldAbandonPendingRequest,
 } from '../intent/pending-request.js';
 import { validatePriorCompanyReference } from '../intent/conversation-context.js';
+import { applyMemoryToClassification } from '../memory/conversation-memory.js';
+import { planExecution } from '../execution/execution-planner.js';
 import { planQuery, TOOLS } from '../planner/plan-query.js';
 import { routeTools, shouldSkipRag } from '../router/tool-router.js';
 import { planAndValidate, validatePlan } from '../validation/plan-validator.js';
@@ -115,6 +117,164 @@ describe('regression: conversation', () => {
       assert.ok(typeof c.confidence === 'number' && c.confidence > 0);
     });
   }
+
+  it('prior-metric + same year → analytics (not llm_fallback)', () => {
+    const msg = 'Scope 1 for TCS in the same year';
+    const memory = memoryBag({
+      lastIntent: 'METRIC_LOOKUP',
+      lastCompanies: ['Infosys Limited'],
+      lastMetric: 'scope1_emissions',
+      lastYear: 2024,
+    });
+    let classification = classifyIntent(msg, memory);
+    classification = applyMemoryToClassification(classification, memory, msg);
+    assert.equal(classification.metric, 'scope1_emissions');
+    assert.ok(classification.entities?.some((e) => /tcs/i.test(e)));
+    assert.equal(classification.filters?.years?.[0], 2024);
+    const { plan } = planExecution({ userMessage: msg, memory, classification });
+    assert.equal(plan.executionStrategy, 'analytics');
+    assert.equal(plan.needsClarification, false);
+    assert.ok(plan.requiredEngines.includes('analytics'));
+  });
+
+  it('short Scope 2 follow-up reuses prior companies', () => {
+    const msg = 'and Scope 2?';
+    const memory = memoryBag({
+      lastIntent: 'METRIC_LOOKUP',
+      lastCompanies: ['Infosys Limited'],
+      lastMetric: 'scope1_emissions',
+      lastYear: 2024,
+    });
+    let classification = classifyIntent(msg, memory);
+    classification = applyMemoryToClassification(classification, memory, msg);
+    assert.ok(classification.entities?.some((e) => /infosys/i.test(e)));
+    const { plan } = planExecution({ userMessage: msg, memory, classification });
+    assert.notEqual(plan.executionStrategy, 'llm_fallback');
+  });
+
+  it('Infosys male/female employees (with typo) is metric lookup, not company count', () => {
+    const msg = 'how many male and female employes are working in infosys company';
+    const memory = memoryBag({
+      lastIntent: 'COUNT_COMPANIES',
+      lastList: { total: 1336 },
+    });
+    let classification = classifyIntent(msg, memory);
+    classification = applyMemoryToClassification(classification, memory, msg);
+    assert.notEqual(classification.intent, 'COUNT_COMPANIES');
+    assert.equal(classification.intent, 'METRIC_LOOKUP');
+    assert.ok(classification.entities?.some((e) => /infosys/i.test(e)));
+    assert.ok(
+      classification.metrics?.includes('male_employee_count')
+      || classification.metrics?.includes('female_employee_count')
+      || /employee_count/.test(classification.metric || ''),
+    );
+    const { plan } = planExecution({ userMessage: msg, memory, classification });
+    assert.equal(plan.executionStrategy, 'analytics');
+    assert.notEqual(plan.executionStrategy, 'clarify');
+  });
+
+  it('year-scoped company count keeps year on the plan', () => {
+    const msg = 'in the year 2025 how many companies hold brsr reports';
+    const classification = classifyIntent(msg);
+    assert.equal(classification.intent, 'COUNT_COMPANIES');
+    assert.equal(classification.filters?.years?.[0], 2025);
+    const { plan } = planExecution({ userMessage: msg, classification });
+    assert.equal(plan.executionStrategy, 'analytics');
+    assert.equal(plan.years?.[0], 2025);
+  });
+
+  it('company-count ask does not reuse prior TCS employee memory', () => {
+    const memory = memoryBag({
+      lastIntent: 'METRIC_LOOKUP',
+      lastCompanies: ['Tata Consultancy Services Limited'],
+      lastMetric: 'female_employee_count',
+      lastYear: 2025,
+      filters: {
+        metric: 'female_employee_count',
+        metrics: ['female_employee_count', 'male_employee_count'],
+        years: [2025],
+      },
+    });
+    for (const msg of [
+      'how many comannies hold brsr reports in 2024',
+      'how many companies are there in 2025 year',
+      'in the year 2025 how many companies hold brsr reports',
+    ]) {
+      let classification = classifyIntent(msg, memory);
+      classification = applyMemoryToClassification(classification, memory, msg);
+      assert.equal(classification.intent, 'COUNT_COMPANIES', msg);
+      assert.deepEqual(classification.entities || [], [], msg);
+      assert.equal(classification.metric, null, msg);
+      assert.ok(!(classification.assumptions || []).some((a) => /Tata|prior companies/i.test(a)), msg);
+      const { plan } = planExecution({ userMessage: msg, memory, classification });
+      assert.equal(plan.executionStrategy, 'analytics', msg);
+      assert.deepEqual(plan.entities || [], [], msg);
+      assert.deepEqual(plan.metrics || [], [], msg);
+      assert.ok(!/Follow-up resolved from prior context/i.test(plan.assumptions?.join(' ') || ''), msg);
+    }
+  });
+
+  it('standalone ask does not borrow prior company/metric without follow-up cues', () => {
+    const memory = memoryBag({
+      lastIntent: 'METRIC_LOOKUP',
+      lastCompanies: ['Tata Consultancy Services Limited'],
+      lastMetric: 'female_employee_count',
+      lastYear: 2025,
+      filters: { metric: 'female_employee_count', years: [2025] },
+    });
+    const msg = 'What is Scope 1 emissions for Infosys Limited in 2024?';
+    let classification = classifyIntent(msg, memory);
+    classification = applyMemoryToClassification(classification, memory, msg);
+    assert.ok(classification.entities?.some((e) => /infosys/i.test(e)), 'keeps Infosys');
+    assert.ok(!(classification.entities || []).some((e) => /tata|tcs/i.test(e)), 'does not add TCS');
+    assert.equal(classification.metric, 'scope1_emissions');
+    assert.equal(classification.filters?.years?.[0], 2024);
+    assert.ok(
+      !(classification.assumptions || []).some((a) => /Follow-up resolved from prior context/i.test(a)),
+    );
+  });
+
+  it('company-count typos still route to COUNT and ignore prior TCS metric', () => {
+    const memory = memoryBag({
+      lastIntent: 'METRIC_LOOKUP',
+      lastCompanies: ['Tata Consultancy Services Limited'],
+      lastMetric: 'female_employee_count',
+      lastYear: 2025,
+      filters: { metric: 'female_employee_count', years: [2025] },
+    });
+    for (const msg of [
+      'how many comanies hold brsr reports in 2026',
+      'how man comanies hold brsr reports in 2024',
+      'how many comannies hold brsr reports in 2024',
+    ]) {
+      let classification = classifyIntent(msg, memory);
+      classification = applyMemoryToClassification(classification, memory, msg);
+      assert.equal(classification.intent, 'COUNT_COMPANIES', msg);
+      assert.deepEqual(classification.entities || [], [], msg);
+      assert.equal(classification.metric, null, msg);
+      assert.ok(classification.filters?.years?.[0] >= 2024, msg);
+    }
+  });
+
+  it('year-only after company-count continues COUNT, not prior metric', () => {
+    const memory = memoryBag({
+      lastIntent: 'COUNT_COMPANIES',
+      canonicalIntent: 'COUNT',
+      lastCompanies: [],
+      lastMetric: null,
+      lastYear: 2025,
+      filters: { years: [2025] },
+      entities: [],
+    });
+    for (const msg of ['in 2024', 'in 2026']) {
+      let classification = classifyIntent(msg, memory);
+      classification = applyMemoryToClassification(classification, memory, msg);
+      assert.equal(classification.intent, 'COUNT_COMPANIES', msg);
+      assert.deepEqual(classification.entities || [], [], msg);
+      assert.equal(classification.metric, null, msg);
+      assert.equal(classification.filters?.years?.[0], Number(msg.match(/20\d{2}/)[0]), msg);
+    }
+  });
 
   it('pending request stores and resumes after clarification', () => {
     const pending = buildPendingRequest({
@@ -336,7 +496,7 @@ describe('regression: routing Narrative / HOW_TO / WHY', () => {
     }
   });
 
-  it('PDF fallback allowed for unsupported company metric', () => {
+  it('PDF fallback skipped for unsupported number ask', () => {
     assert.equal(
       isCompanyScopedDocumentFallbackEligible({
         classification: {
@@ -346,6 +506,21 @@ describe('regression: routing Narrative / HOW_TO / WHY', () => {
         },
         companies: ['Infosys Limited'],
         userMessage: 'plastic footprint Infosys',
+      }),
+      false,
+    );
+  });
+
+  it('PDF fallback allowed when user asks for the report', () => {
+    assert.equal(
+      isCompanyScopedDocumentFallbackEligible({
+        classification: {
+          intent: INTENTS.METRIC_LOOKUP,
+          metricResolution: METRIC_RESOLUTION.UNSUPPORTED,
+          filters: { unsupportedMetric: true },
+        },
+        companies: ['Infosys Limited'],
+        userMessage: 'plastic footprint Infosys from the BRSR PDF',
       }),
       true,
     );

@@ -1,15 +1,17 @@
 :root {
-  --bg: #0f1419;
-  --panel: #1a222c;
-  --border: #2c3845;
-  --text: #e7eef5;
-  --muted: #8fa3b5;
-  --accent: #3d9a7a;
-  --warn: #d4a017;
+  --bg: #171717;
+  --panel: #1e1e1e;
+  --border: #303030;
+  --text: #eceff8;
+  --muted: #a7a7a7;
+  --accent: #8e4dff;
+  --warn: #c9a227;
   --bad: #d45a5a;
-  --ok: #5cb88a;
-  --font: "IBM Plex Sans", "Segoe UI", sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  --ok: #6dbf8a;
+  --font: "Inter", "Segoe UI", sans-serif;
+  --font-display: "Poppins", "Inter", sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --on-accent: #f5f6f9;
 }
 
 * { box-sizing: border-box; }
@@ -30,14 +32,14 @@ body {
   align-items: flex-end;
   padding: 1.25rem 1.5rem;
   border-bottom: 1px solid var(--border);
-  background: linear-gradient(180deg, #15202b, var(--bg));
+  background: linear-gradient(180deg, #1e1e1e, var(--bg));
 }
 
 h1 {
   margin: 0;
   font-size: 1.35rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-family: var(--font-display);
+  font-weight: 700;
 }
 
 .sub {
@@ -76,7 +78,7 @@ h1 {
 
 button, .link {
   background: var(--accent);
-  color: #04140f;
+  color: var(--on-accent);
   border: none;
   border-radius: 4px;
   padding: 0.45rem 0.8rem;

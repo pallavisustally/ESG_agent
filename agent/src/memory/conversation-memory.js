@@ -20,6 +20,7 @@ import {
 import {
   validatePriorCompanyReference,
   getPriorCompanyList,
+  limitPriorCompaniesForMessage,
   refersToPriorCompanies,
 } from '../intent/conversation-context.js';
 import {
@@ -30,6 +31,7 @@ import {
   shouldAbandonPendingRequest,
   resumeClassificationFromPending,
 } from '../intent/pending-request.js';
+import { looksLikeCompanyCountAsk, INTENTS, classifyIntent } from '../intent/classify-intent.js';
 
 const STORE = new Map();
 const MAX_ENTRIES = 500;
@@ -110,10 +112,17 @@ export function getMemory(key) {
 export function updateMemory(key, patch = {}) {
   if (!key) return createEmptyMemory();
   const prev = getMemory(key);
+  const mergedFilters = patch.replaceFilters
+    ? { ...(patch.filters || {}) }
+    : { ...(prev.filters || {}), ...(patch.filters || {}) };
+  if (patch.lastMetric === null) {
+    delete mergedFilters.metric;
+    delete mergedFilters.metrics;
+  }
   const next = {
     ...prev,
     ...patch,
-    filters: { ...(prev.filters || {}), ...(patch.filters || {}) },
+    filters: mergedFilters,
     lastCompanies: patch.lastCompanies != null ? uniq(patch.lastCompanies) : prev.lastCompanies,
     lastPageItems: patch.lastPageItems != null ? [...patch.lastPageItems] : prev.lastPageItems,
     entities: patch.entities != null ? uniq(patch.entities) : prev.entities,
@@ -130,6 +139,8 @@ export function updateMemory(key, patch = {}) {
     lastResultSummary: null,
     updatedAt: Date.now(),
   };
+  // replaceFilters is a write directive, not session state.
+  delete next.replaceFilters;
   STORE.set(key, next);
   prune();
   return next;
@@ -137,6 +148,189 @@ export function updateMemory(key, patch = {}) {
 
 export function clearMemory(key) {
   if (key) STORE.delete(key);
+}
+
+const MEMORY_PERSIST_KEYS = [
+  'lastIntent',
+  'canonicalIntent',
+  'lastCompanies',
+  'lastMetric',
+  'lastYear',
+  'lastSector',
+  'lastAssumptions',
+  'filters',
+  'page',
+  'pageSize',
+  'total',
+  'lastPageItems',
+  'awaitingMore',
+  'wantsAll',
+  'entities',
+  'resolvedCompany',
+  'comparisonContext',
+  'pendingRequest',
+  'updatedAt',
+];
+
+export function sessionIdFromMemoryKey(key) {
+  const raw = String(key || '');
+  if (raw.startsWith('session:')) return raw.slice('session:'.length) || null;
+  return null;
+}
+
+export function memoryHasFollowUpSlots(memory = null) {
+  if (!memory) return false;
+  return Boolean(
+    (memory.lastCompanies || []).length
+    || memory.lastMetric
+    || memory.lastYear
+    || memory.pendingRequest
+    || memory.comparisonContext
+    || (memory.entities || []).length,
+  );
+}
+
+export function serializeMemoryForStorage(memory = null) {
+  const src = memory && typeof memory === 'object' ? memory : createEmptyMemory();
+  const out = {};
+  for (const key of MEMORY_PERSIST_KEYS) {
+    if (src[key] !== undefined) out[key] = src[key];
+  }
+  out.lastCompanies = uniq(out.lastCompanies || []).slice(0, 10);
+  out.entities = uniq(out.entities || out.lastCompanies || []).slice(0, 10);
+  out.lastPageItems = Array.isArray(out.lastPageItems) ? out.lastPageItems.slice(0, 10) : [];
+  out.lastAssumptions = Array.isArray(out.lastAssumptions) ? out.lastAssumptions.slice(0, 8) : [];
+  out.lastPlan = null;
+  out.lastTool = null;
+  out.lastResultSummary = null;
+  return out;
+}
+
+export function memoryFromStorage(raw = null) {
+  if (!raw) return createEmptyMemory();
+  let parsed = raw;
+  if (typeof raw === 'string') {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return createEmptyMemory();
+    }
+  }
+  if (!parsed || typeof parsed !== 'object') return createEmptyMemory();
+  return {
+    ...createEmptyMemory(),
+    ...parsed,
+    lastCompanies: uniq(parsed.lastCompanies || parsed.entities || []),
+    lastPlan: null,
+    lastTool: null,
+    lastResultSummary: null,
+  };
+}
+
+function applyHydrationPatch(prev, patch = {}) {
+  const mergedFilters = patch.replaceFilters
+    ? { ...(patch.filters || {}) }
+    : { ...(prev.filters || {}), ...(patch.filters || {}) };
+  if (patch.lastMetric === null) {
+    delete mergedFilters.metric;
+    delete mergedFilters.metrics;
+  }
+  return {
+    ...prev,
+    ...patch,
+    filters: mergedFilters,
+    lastCompanies: patch.lastCompanies != null ? uniq(patch.lastCompanies) : prev.lastCompanies,
+    lastPageItems: patch.lastPageItems != null ? [...patch.lastPageItems] : prev.lastPageItems,
+    entities: patch.entities != null ? uniq(patch.entities) : prev.entities,
+    lastAssumptions: patch.lastAssumptions != null ? [...patch.lastAssumptions] : prev.lastAssumptions,
+    comparisonContext: patch.comparisonContext !== undefined
+      ? patch.comparisonContext
+      : prev.comparisonContext,
+    pendingRequest: patch.pendingRequest !== undefined
+      ? patch.pendingRequest
+      : prev.pendingRequest,
+    lastPlan: null,
+    lastTool: null,
+    lastResultSummary: null,
+    updatedAt: Date.now(),
+  };
+}
+
+/**
+ * Rebuild follow-up slots from prior user turns when the in-process Map is empty
+ * (serverless cold start, new isolate, or a session loaded from history only).
+ */
+export function hydrateMemoryFromChatHistory(chatHistory = [], seed = null) {
+  let memory = seed
+    ? { ...createEmptyMemory(), ...seed }
+    : createEmptyMemory();
+  const turns = Array.isArray(chatHistory) ? chatHistory : [];
+  for (const msg of turns) {
+    if (msg?.role !== 'user') continue;
+    const text = String(msg.content || msg.text || '').trim();
+    if (!text) continue;
+    const classification = classifyIntent(text, memory);
+    const merged = applyMemoryToClassification(classification, memory, text);
+    const patch = buildStructuredMemoryPatch({ classification: merged });
+    memory = applyHydrationPatch(memory, patch);
+  }
+  return memory;
+}
+
+function pickNewerMemory(a, b) {
+  if (a && !b) return a;
+  if (b && !a) return b;
+  if (!a && !b) return null;
+  return (Number(a.updatedAt) || 0) >= (Number(b.updatedAt) || 0) ? a : b;
+}
+
+/**
+ * Combine DB snapshot, in-process Map, and the visible transcript.
+ * Seed slots win when present; transcript fills anything still missing.
+ */
+export function mergeMemoryLayers({ stored = null, live = null, chatHistory = [] } = {}) {
+  const storedMem = stored && memoryHasFollowUpSlots(stored) ? memoryFromStorage(stored) : null;
+  const liveMem = live && memoryHasFollowUpSlots(live) ? { ...createEmptyMemory(), ...live } : null;
+  const seed = pickNewerMemory(liveMem, storedMem);
+  const fromHistory = hydrateMemoryFromChatHistory(chatHistory, createEmptyMemory());
+  if (!seed) return fromHistory;
+  return {
+    ...fromHistory,
+    ...seed,
+    lastCompanies: (seed.lastCompanies || []).length ? seed.lastCompanies : fromHistory.lastCompanies,
+    entities: (seed.entities || seed.lastCompanies || []).length
+      ? (seed.entities || seed.lastCompanies)
+      : fromHistory.entities,
+    lastMetric: seed.lastMetric || fromHistory.lastMetric,
+    lastYear: seed.lastYear ?? fromHistory.lastYear,
+    lastSector: seed.lastSector || fromHistory.lastSector,
+    comparisonContext: seed.comparisonContext || fromHistory.comparisonContext,
+    pendingRequest: seed.pendingRequest || fromHistory.pendingRequest,
+    filters: {
+      ...(fromHistory.filters || {}),
+      ...(seed.filters || {}),
+    },
+    lastPlan: null,
+    lastTool: null,
+    lastResultSummary: null,
+    updatedAt: Date.now(),
+  };
+}
+
+export function replaceMemory(key, next = {}) {
+  if (!key) return createEmptyMemory();
+  const value = {
+    ...createEmptyMemory(),
+    ...next,
+    lastPlan: null,
+    lastTool: null,
+    lastResultSummary: null,
+    updatedAt: Date.now(),
+  };
+  delete value.replaceFilters;
+  STORE.set(key, value);
+  prune();
+  return getMemory(key);
 }
 
 /**
@@ -176,8 +370,13 @@ export function buildStructuredMemoryPatch({
     || classification?.filters?.metricResolution
     || null;
 
+  const isCount = classification?.intent === 'COUNT_COMPANIES'
+    || plan?.intent === 'COUNT_COMPANIES'
+    || classification?.canonicalIntent === 'COUNT';
+
   // Do not store unsupported metrics into memory (would poison NONE reuse).
-  const metric = metricResolution === METRIC_RESOLUTION.UNSUPPORTED
+  // Company-count turns must not keep a prior workforce/emissions metric.
+  const metric = (isCount || metricResolution === METRIC_RESOLUTION.UNSUPPORTED)
     ? null
     : (patch.filters?.metric
       || patch.lastMetric
@@ -230,11 +429,18 @@ export function buildStructuredMemoryPatch({
     ...(comparisonContext !== undefined ? { comparisonContext } : {}),
     // Clear pending unless caller explicitly preserves/sets it.
     pendingRequest: patch.pendingRequest !== undefined ? patch.pendingRequest : null,
+    ...(isCount ? {
+      lastCompanies: [],
+      entities: [],
+      lastPageItems: [],
+      comparisonContext: null,
+      replaceFilters: true,
+    } : {}),
   };
 
   // Only write company lists when an engine (or non-empty derived list) supplies them.
   // Omitting empty lists preserves prior lastCompanies across knowledge/guidance turns.
-  if (engineCompanies || companies.length) {
+  if (!isCount && (engineCompanies || companies.length)) {
     out.lastCompanies = companies;
     out.entities = companies;
     if (patch.lastPageItems != null) out.lastPageItems = [...patch.lastPageItems];
@@ -268,6 +474,52 @@ export function applyMemoryToClassification(classification, memory, userMessage 
     assumptions: [...(classification.assumptions || [])],
     metricResolution,
   };
+
+  // Hard isolation: company-count / BRSR filing-count asks never reuse prior
+  // company or workforce metric context (prevents TCS employee answers on
+  // “how many companies in 2024?”).
+  if (looksLikeCompanyCountAsk(userMessage)) {
+    const years = yearsFromMessageOrFilters(userMessage, out.filters);
+    out.intent = INTENTS.COUNT_COMPANIES;
+    out.canonicalIntent = 'COUNT';
+    out.entities = [];
+    out.metric = null;
+    out.metrics = [];
+    out.wantsAll = false;
+    out.confidence = Math.max(Number(out.confidence) || 0, 0.95);
+    out.clarification = null;
+    out.filters = {
+      metricResolution: METRIC_RESOLUTION.NONE,
+      ...(years.length ? { years } : {}),
+    };
+    out.assumptions = [
+      ...out.assumptions.filter((a) => !/prior context|prior companies|Follow-up/i.test(String(a))),
+      'Company-count ask — prior company/metric follow-up context was not reused.',
+    ];
+    return out;
+  }
+
+  // After a company-count answer, bare year asks ("in 2024") continue COUNT — not metric lookup.
+  if (isYearOnlyFollowUp(userMessage) && isPriorCompanyCountMemory(memory)) {
+    const years = yearsFromMessageOrFilters(userMessage, out.filters);
+    out.intent = INTENTS.COUNT_COMPANIES;
+    out.canonicalIntent = 'COUNT';
+    out.entities = [];
+    out.metric = null;
+    out.metrics = [];
+    out.wantsAll = false;
+    out.confidence = Math.max(Number(out.confidence) || 0, 0.95);
+    out.clarification = null;
+    out.filters = {
+      metricResolution: METRIC_RESOLUTION.NONE,
+      ...(years.length ? { years } : {}),
+    };
+    out.assumptions = [
+      ...out.assumptions.filter((a) => !/prior context|prior companies|Follow-up/i.test(String(a))),
+      'Year-only follow-up continued prior company-count ask.',
+    ];
+    return out;
+  }
 
   // Pending clarification continuation: merge prior unresolved ask once companies can be supplied.
   const pending = memory.pendingRequest || null;
@@ -319,7 +571,21 @@ export function applyMemoryToClassification(classification, memory, userMessage 
     }
   }
 
-  const priorCompanies = getPriorCompanyList(memory);
+  // Strict gate: borrow prior company/metric/year only when the message has
+  // clear follow-up cues (or pagination / pending clarification). Fresh asks
+  // always answer from this turn's SQL intent alone.
+  if (!shouldReuseConversationMemory(userMessage, out)) {
+    out.assumptions = out.assumptions.filter(
+      (a) => !/prior context|Follow-up resolved|reused prior|Using prior year/i.test(String(a)),
+    );
+    return out;
+  }
+
+  const priorCompanies = limitPriorCompaniesForMessage(
+    userMessage,
+    getPriorCompanyList(memory),
+    memory,
+  );
 
   const canReuseMetric = shouldReuseMemoryMetric(metricResolution);
 
@@ -489,6 +755,51 @@ export function applyMemoryToClassification(classification, memory, userMessage 
     }
   }
 
+  // "same year" / "that year" — keep companies/metric from this turn; borrow year from memory.
+  if (refersToPriorYear(text) && memory.lastYear && !out.filters.years?.length) {
+    out.filters.years = [memory.lastYear];
+    out.assumptions = [
+      ...out.assumptions,
+      `Using prior year ${memory.lastYear} from conversation.`,
+    ];
+  }
+
+  // Short metric follow-up ("and Scope 2?", "Scope 1 too") — reuse prior companies when none named.
+  if (
+    isShortMetricFollowUp(text, out)
+    && priorCompanies.length
+    && (
+      !out.entities?.length
+      || out.intent === 'UNKNOWN'
+      || out.intent === 'FOLLOW_UP'
+      || out.intent === 'METRIC_LOOKUP'
+      || out.intent === 'TREND_ANALYSIS'
+      || out.intent === 'CHART_REQUEST'
+    )
+  ) {
+    if (!out.entities?.length) {
+      out.entities = [...priorCompanies].slice(0, 5);
+    }
+    out.filters.followUpCompanies = true;
+    if (
+      out.intent === 'UNKNOWN'
+      || out.intent === 'FOLLOW_UP'
+      || !out.intent
+    ) {
+      out.intent = 'METRIC_LOOKUP';
+      out.canonicalIntent = 'LOOKUP';
+      out.confidence = Math.max(Number(out.confidence) || 0, 0.86);
+    }
+    if (memory.lastYear && !out.filters.years?.length) {
+      out.filters.years = [memory.lastYear];
+    }
+    if (out.metric) out.filters.metric = out.metric;
+    out.assumptions = [
+      ...out.assumptions,
+      `Follow-up metric ask reused prior companies: ${out.entities.slice(0, 3).join(', ')}.`,
+    ];
+  }
+
   return out;
 }
 
@@ -496,14 +807,98 @@ function refersToPriorCompaniesLocal(text) {
   return refersToPriorCompanies(text);
 }
 
+function refersToPriorYear(text) {
+  return /\b(same\s+year|that\s+year|previous\s+year|prior\s+year|last\s+year)\b/i.test(
+    String(text || ''),
+  );
+}
+
+function yearsFromMessageOrFilters(userMessage = '', filters = null) {
+  if (Array.isArray(filters?.years) && filters.years.length) {
+    return filters.years.map(Number).filter(Number.isFinite);
+  }
+  return [...new Set([...String(userMessage || '').matchAll(/\b(20\d{2})\b/g)].map((m) => Number(m[1])))];
+}
+
+function isPriorCompanyCountMemory(memory = null) {
+  if (!memory) return false;
+  return memory.lastIntent === INTENTS.COUNT_COMPANIES
+    || memory.canonicalIntent === 'COUNT'
+    || (
+      !memory.lastMetric
+      && !memory.filters?.metric
+      && !(memory.lastCompanies || []).length
+      && memory.lastYear != null
+    );
+}
+
+function isShortMetricFollowUp(text, classification) {
+  const t = String(text || '').trim();
+  if (!t || t.length > 96) return false;
+  if (looksLikeCompanyCountAsk(t)) return false;
+  if (/\b(top|bottom|highest|lowest|list\s+all|compare)\b/i.test(t)) return false;
+  const hasMetric = Boolean(
+    classification?.metric
+    || isExecutableMetricResolution(classification?.metricResolution),
+  );
+  if (!hasMetric) return false;
+  // "and Scope 2?", "Scope 2 as well", "what about Scope 1"
+  return (
+    /^(and\s+)?(what\s+about\s+|how\s+about\s+)?(scope\s*[123]|renewable|water|waste|energy|ltifr|female|male)\b/i.test(t)
+    || /\b(as\s+well|too|also)\s*\??$/i.test(t)
+    || /^(and\s+)?scope\s*[123]\b/i.test(t)
+  );
+}
+
 function isYearOnlyFollowUp(text) {
   const t = String(text || '').trim();
+  if (looksLikeCompanyCountAsk(t)) return false;
   if (!/\b(20\d{2})\b/.test(t)) return false;
   if (/\b(top|bottom|highest|lowest|list\s+all|show\s+all)\b/i.test(t)) return false;
   return (
     /\b(how about|what about|same for|and for|for)\s+20\d{2}\b/i.test(t)
     || /^(in\s+)?20\d{2}\??$/i.test(t)
   );
+}
+
+/**
+ * Explicit cues that the user is continuing prior chat (not a fresh standalone ask).
+ */
+export function hasExplicitFollowUpCue(text = '', classification = null) {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  if (refersToPriorCompanies(t)) return true;
+  if (refersToPriorYear(t)) return true;
+  if (isYearOnlyFollowUp(t)) return true;
+  if (isShortMetricFollowUp(t, classification)) return true;
+  if (/^(next|more|continue|show more|next page)\b/i.test(t)) return true;
+  if (/\b(same\s+(for|metric|company|year)|previous\s+year|that\s+year|last\s+year|as\s+above)\b/i.test(t)) {
+    return true;
+  }
+  if (/\b(how about|what about)\b/i.test(t) && t.length < 100) return true;
+  if (/^(and\s+)?(also\s+)?(scope\s*[123]|renewable|employees?)\b/i.test(t) && t.length < 80) {
+    return true;
+  }
+  if (/\b(show|plot|graph|chart)\s+(that|it|this|the\s+same|those|them)\b/i.test(t)) return true;
+  if (/^(show\s+(me\s+)?(a\s+)?(chart|graph|plot)|chart\s+it|graph\s+it)\b/i.test(t)) return true;
+  if (/\bcompare\s+(the\s+)?(first\s+(two|three)|above|those|them)\b/i.test(t)) return true;
+  return false;
+}
+
+/**
+ * Gate for borrowing conversation memory into the current turn.
+ * Pagination and pending-clarification resume always reuse; company-count asks never do.
+ */
+export function shouldReuseConversationMemory(userMessage = '', classification = null) {
+  if (looksLikeCompanyCountAsk(userMessage)) return false;
+  if (classification?.intent === 'PAGINATE_CONTINUE') return true;
+  if (
+    classification?.filters?.resumedFromPending
+    || classification?.filters?.clarificationProvidesCompanies
+  ) {
+    return true;
+  }
+  return hasExplicitFollowUpCue(userMessage, classification);
 }
 
 /** Snapshot used by LLM intent extractor / logging. */

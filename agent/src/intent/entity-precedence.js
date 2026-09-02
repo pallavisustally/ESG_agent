@@ -8,6 +8,7 @@
 import {
   refersToPriorCompanies,
   getPriorCompanyList,
+  limitPriorCompaniesForMessage,
   MISSING_PRIOR_COMPANIES_CLARIFICATION,
 } from './conversation-context.js';
 import {
@@ -112,7 +113,11 @@ export function chooseEntitiesByPrecedence({
   userMessage = '',
   memory = null,
 } = {}) {
-  const prior = getPriorCompanyList(memory);
+  const prior = limitPriorCompaniesForMessage(
+    userMessage,
+    getPriorCompanyList(memory),
+    memory,
+  );
   const refersToPrior = refersToPriorCompanies(userMessage);
   const validated = Array.isArray(validatedCompanies) ? validatedCompanies.filter(Boolean) : null;
 

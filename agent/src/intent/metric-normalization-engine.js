@@ -189,7 +189,7 @@ function buildResult({
   return {
     engineState,
     metric: metric || null,
-    metrics: metric ? [metric] : [],
+    metrics: expandMetricsList(metric, features, candidates),
     confidence: Number(confidence) || 0,
     features,
     candidates: (candidates || []).slice(0, 5).map((c) => ({
@@ -206,4 +206,35 @@ function buildResult({
     reason,
     winner,
   };
+}
+
+/**
+ * Prefer both male+female counts when the user asked for both genders.
+ */
+function expandMetricsList(metric, features, candidates = []) {
+  if (!metric) return [];
+  const ids = [metric];
+  const attrs = features?.attributes || [];
+  const bothGenders = attrs.includes('male') && attrs.includes('female');
+  const countAsk = features?.measure === 'count' || features?.quantityAsk;
+
+  if (bothGenders && countAsk) {
+    for (const id of ['female_employee_count', 'male_employee_count']) {
+      if (!ids.includes(id)) ids.push(id);
+    }
+    return ids;
+  }
+
+  for (const c of candidates) {
+    if (
+      c.id
+      && c.id !== metric
+      && c.score >= SCORE_MEDIUM
+      && c.def?.kind !== 'unsupported_topic'
+      && !ids.includes(c.id)
+    ) {
+      ids.push(c.id);
+    }
+  }
+  return ids;
 }

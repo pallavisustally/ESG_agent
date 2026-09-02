@@ -75,6 +75,7 @@ Require check **Deploy gate (quality gates passed)** before deploy.
 
 | Doc | Contents |
 |-----|----------|
+| [docs/END_TO_END_AI_AGENT_GUIDE.md](docs/END_TO_END_AI_AGENT_GUIDE.md) | Plain-English end-to-end: folders, PDF download, BRSR → Neon, compare tools, runtime flow |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Planner → Orchestrator → Engines → Composer → Validator |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Flags, monitoring, logging, troubleshooting |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Vercel, env matrix, probes, rollback |

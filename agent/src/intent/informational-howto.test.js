@@ -86,7 +86,7 @@ describe('informational vs how-to vs metric lookup', () => {
   it('informational answer defines carbon emissions', () => {
     const text = buildInformationalAnswer('What are carbon emissions?');
     assert.match(text, /Scope 1/i);
-    assert.match(text, /Informational answer/i);
+    assert.doesNotMatch(text, /Informational answer/i);
     assert.doesNotMatch(text, /SELECT /i);
   });
 });

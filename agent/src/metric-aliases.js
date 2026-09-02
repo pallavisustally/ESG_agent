@@ -59,36 +59,51 @@ export const METRIC_ALIASES = [
       + 'or ask which scope if the user needs one scope only. Never reply that carbon emissions are unavailable.',
   },
   {
+    id: 'total_ghg',
+    pattern:
+      /\btotal\s+(carbon|ghg|greenhouse(\s+gas)?)\s*(emis\w*)?\b|\btotal\s+emis\w*\b|\boverall\s+(carbon|ghg|emis\w*)\b|\bghg\s+total\b|\bsum\s+of\s+scope\b/i,
+    columns: ['scope1_emissions', 'scope2_emissions', 'scope3_emissions'],
+    guidance:
+      'Map total/overall GHG to Scope 1+2+3 sum (total_emissions / total_ghg_emissions expression), not a single scope column.',
+  },
+  {
     id: 'renewable_share',
     pattern:
-      /\brenewable\b.*\b(share|percent|percentage|%|mix)\b|\b(share|percent|percentage|%)\b.*\brenewable\b|\bclean\s+energy\s+share\b|\bgreen\s+energy\s+share\b|\brenewable\s+energy\b/i,
+      /\brenewable\b.*\b(share|percent|percentage|%|mix)\b|\b(share|percent|percentage|%)\b.*\brenewable\b|\bclean\s+energy\s+share\b|\bgreen\s+energy\s+share\b|\brenewable\s+energy\b|\bgreen\s+energy\b|\bclean\s+power\b|\brenewables?\s+mix\b/i,
     columns: ['renewable_energy_share'],
     guidance: 'Use renewable_energy_share (and renewable_energy_consumption / energy_consumption for breakdown).',
   },
   {
     id: 'water_use',
-    pattern: /\bwater\s+(use|usage|consumed|consumption|withdraw)\b|\bfresh\s*water\b|\beffluent\b|\bwater\s+stress\b/i,
+    pattern: /\bwater\s+(use|usage|consumed|consumption|withdraw)\b|\bfresh\s*water\b|\beffluent\b|\bwater\s+stress\b|\bwater\s+footprint\b/i,
     columns: ['water_consumption'],
     guidance: 'Use water_consumption (water_withdrawal if they ask withdrawal).',
   },
   {
     id: 'waste',
-    pattern: /\bwaste\s+(generated|generation|produced|disposed)\b|\bsolid\s+waste\b|\bhazardous\s+waste\b/i,
+    pattern: /\bwaste\s+(generated|generation|produced|disposed)\b|\bsolid\s+waste\b|\bhazardous\s+waste\b|\bwaste\s+footprint\b/i,
     columns: ['waste_generated'],
     guidance: 'Use waste_generated.',
   },
   {
     id: 'energy_use',
-    pattern: /\benergy\s+(use|usage|consumed|consumption)\b|\btotal\s+energy\b|\bpower\s+consumption\b|\belectricity\s+consumption\b/i,
+    pattern: /\benergy\s+(use|usage|consumed|consumption)\b|\btotal\s+energy\b|\bpower\s+consumption\b|\belectricity\s+consumption\b|\benergy\s+footprint\b/i,
     columns: ['energy_consumption'],
     guidance: 'Use energy_consumption.',
   },
   {
     id: 'female_workforce_share',
     pattern:
-      /\b(female|women|gender)\b.*\b(employee|workforce|staff).*\b(share|percent|percentage|%)\b|\b(share|percent|percentage|%)\b.*\b(female|women)\b.*\b(employee|workforce)\b|\bwomen\s+in\s+(the\s+)?workforce\b|\bwomen(?:'s)?\s+workforce\s*%?\b|\bfemale\s+workforce\s*%?\b|\bworkforce\s*%\b.*\b(female|women)\b|\bgender\s+diversity\b|\bworkforce\s+diversity\b/i,
+      /\b(female|women|gender)\b.*\b(employee|workforce|staff).*\b(share|percent|percentage|%|\bratio)\b|\b(share|percent|percentage|%)\b.*\b(female|women)\b.*\b(employee|workforce)\b|\bwomen\s+in\s+(the\s+)?workforce\b|\bwomen(?:'s)?\s+workforce\s*%?\b|\bfemale\s+workforce\s*%?\b|\bworkforce\s*%\b.*\b(female|women)\b|\bgender\s+diversity\b|\bworkforce\s+diversity\b|\bwomen\s+employees?\b|\bfemale\s+employees?\b(?!\s*count)/i,
     columns: ['female_employee_share'],
-    guidance: 'Use female_employee_share (not female_employee_count) when they ask share/percentage.',
+    guidance: 'Use female_employee_share (not female_employee_count) when they ask share/percentage/women employees.',
+  },
+  {
+    id: 'female_employee_count',
+    pattern:
+      /\bhow\s+many\s+(female|women)\s+emplo\w*\b|\b(female|women)\s+emplo\w*\s+count\b|\bnumber\s+of\s+(female|women)\s+emplo\w*\b|\b(female|women)\s+headcount\b/i,
+    columns: ['female_employee_count'],
+    guidance: 'Use female_employee_count when they ask for a headcount of women/female employees.',
   },
   {
     id: 'male_workforce_share',
@@ -107,13 +122,13 @@ export const METRIC_ALIASES = [
   {
     id: 'female_board_share',
     pattern:
-      /\b(female|women)\b.*\bboard\b.*\b(share|percent|percentage|%)\b|\bboard\b.*\b(female|women)\b.*\b(share|percent|percentage|%)\b|\bwomen\s+on\s+(the\s+)?board\b|\bboard\s+diversity\b|\bgender\s+diversity\s+on\s+(the\s+)?board\b/i,
+      /\b(female|women)\b.*\bboard\b.*\b(share|percent|percentage|%)\b|\bboard\b.*\b(female|women)\b.*\b(share|percent|percentage|%)\b|\bwomen\s+on\s+(the\s+)?board\b|\bboard\s+diversity\b|\bgender\s+diversity\s+on\s+(the\s+)?board\b|\bfemale\s+directors?\b|\bwomen\s+directors?\b/i,
     columns: ['female_board_share'],
     guidance: 'Use female_board_share.',
   },
   {
     id: 'safety_ltifr',
-    pattern: /\bltifr\b|\blost\s+time\s+injur|\bsafety\s+rate\b|\binjury\s+frequency\b|\bsafety\s+incident/i,
+    pattern: /\bltifr\b|\blost\s+time\s+injur|\bsafety\s+rate\b|\binjury\s+frequency\b|\bsafety\s+incident|\bworkplace\s+safety\b/i,
     columns: ['safety_ltifr'],
     guidance: 'Use safety_ltifr.',
   },
@@ -370,6 +385,21 @@ export function maybeLogUnresolvedEsgPhrase(userMessage, metricAliases) {
     userMessage: text,
     detail: { normalized: normalizeMetricQueryText(text) },
   });
+  // Also surface in agent observability JSONL for weekly review.
+  try {
+    // Lazy import avoids circular deps with observability at module load.
+    import('./observability/agent-logger.js')
+      .then(({ logPipelineStage }) => {
+        logPipelineStage('metric_alias_unresolved', {
+          ok: false,
+          message: String(text).slice(0, 200),
+          normalized: normalizeMetricQueryText(text),
+        });
+      })
+      .catch(() => {});
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Compact glossary for the system prompt. */

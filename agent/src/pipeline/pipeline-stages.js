@@ -41,6 +41,8 @@ import {
   updateMemory,
   applyMemoryToClassification,
   memoryKeyFromRequest,
+  mergeMemoryLayers,
+  replaceMemory,
 } from '../memory/conversation-memory.js';
 import { collectAssumptions, assumptionsSystemAddon } from '../answers/assumptions.js';
 import { fluencySystemAddon } from '../answers/templates.js';
@@ -52,11 +54,23 @@ import { isCompanyScopedDocumentFallbackEligible, resolveFallbackCompanies } fro
 
 /**
  * START / preprocessing — session memory key + load structured memory.
+ * Cold-start safe: DB snapshot + in-process Map + transcript hydration.
  */
-export function stagePreprocess({ userMessage, chatHistory = [], sessionId = null, onProgress = null }) {
+export async function stagePreprocess({ userMessage, chatHistory = [], sessionId = null, onProgress = null }) {
   const elapsed = startTimer();
   const key = memoryKeyFromRequest({ sessionId, chatHistory, userMessage });
-  const memory = getMemory(key);
+  const live = getMemory(key);
+  let stored = null;
+  if (sessionId) {
+    try {
+      const { getSessionMemory } = await import('../user-chats.js');
+      stored = await getSessionMemory(sessionId);
+    } catch (err) {
+      console.warn('[memory] failed to load persisted session memory:', err?.message || err);
+    }
+  }
+  const merged = mergeMemoryLayers({ stored, live, chatHistory });
+  const memory = replaceMemory(key, merged);
   return {
     userMessage,
     chatHistory,
@@ -547,7 +561,12 @@ export function stageRouter(state) {
   }
 
   if (state.plan?.strategy === 'unsupported_metric') {
-    const companies = resolveFallbackCompanies(state.classification, state.memory, null);
+    const companies = resolveFallbackCompanies(
+      state.classification,
+      state.memory,
+      null,
+      state.userMessage,
+    );
     const mayFallback = isCompanyScopedDocumentFallbackEligible({
       classification: state.classification,
       plan: state.plan,

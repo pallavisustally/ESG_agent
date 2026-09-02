@@ -12,9 +12,6 @@ import {
   formatRegistryAnswer,
 } from '../knowledge/framework-registry.js';
 
-const KNOWLEDGE_FOOTER =
-  '_ESG knowledge answer — general concept explanation, not a company database lookup._';
-
 /** Legacy glossary kept for USE_FRAMEWORK_REGISTRY=false rollback. */
 const LEGACY_GLOSSARY = [
   {
@@ -27,10 +24,6 @@ const LEGACY_GLOSSARY = [
       '- **Environmental** — Scope 1/2/3 emissions, renewable energy share, water consumption, waste generated',
       '- **Social** — female employee share, board diversity, safety (LTIFR), total employees',
       '- **Governance / economic** — board composition indicators, revenue (when used alongside ESG analysis)',
-      '',
-      'This Copilot can look up reported metric **values** when you name a company (and optionally a year), e.g. “What are Infosys Scope 1 emissions in 2024?”',
-      '',
-      'Ask “What is Scope 1?” if you want a definition of a specific metric.',
     ].join('\n'),
   },
   {
@@ -258,15 +251,9 @@ export function lookupKnowledge(userMessage = '') {
 
 function formatKnownAnswer(entry) {
   if (entry.entry && useFrameworkRegistry()) {
-    return formatRegistryAnswer(entry.entry, { footer: KNOWLEDGE_FOOTER });
+    return formatRegistryAnswer(entry.entry);
   }
-  return [
-    `### ${entry.title}`,
-    '',
-    entry.body,
-    '',
-    KNOWLEDGE_FOOTER,
-  ].join('\n');
+  return [`### ${entry.title}`, '', entry.body].join('\n');
 }
 
 /**

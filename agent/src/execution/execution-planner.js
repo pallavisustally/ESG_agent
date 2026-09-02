@@ -20,6 +20,7 @@ import {
   shouldUseCapabilityExecutor,
 } from '../capability/capability-planner.js';
 import { CAPABILITIES } from '../capability/capabilities.js';
+import { wantsDocumentEvidence } from '../answers/no-data-template.js';
 import {
   createExecutionPlan,
   validateExecutionPlan,
@@ -49,14 +50,19 @@ export function planExecution(input = {}) {
   const intent = classification.intent || null;
 
   const metrics = resolveMetrics(classification, filters);
-  const years = resolveYears(filters, memory);
+  const years = resolveYears(filters, memory, intent);
   const entities = Array.isArray(classification.entities) ? [...classification.entities] : [];
 
-  const needsClarification = Boolean(
-    classification.clarification
-      || filters.needsPriorCompanies
-      || (intent === INTENTS.UNKNOWN && Number(classification.confidence) < 0.4),
-  );
+  const clarify = resolveClarificationNeed({
+    classification,
+    memory,
+    intent,
+    entities,
+    metrics,
+    userMessage,
+    capabilityPlan,
+  });
+  const needsClarification = clarify.needsClarification;
 
   const caps = capabilityPlan.capabilities || [];
   const needsKnowledge = caps.includes(CAPABILITIES.ESG_KNOWLEDGE);
@@ -69,12 +75,10 @@ export function planExecution(input = {}) {
     || isSqlIntent(intent);
   const needsReport = caps.includes(CAPABILITIES.COMPANY_REPORTS)
     || isReportIntent(intent);
-  // PDF is a Report Engine strategy — signal when report path / metric miss may need pages.
+  // PDF only when the user asked for the filing, or this is a report lookup.
   const needsPdf = needsReport
-    || (needsSql && entities.length > 0 && (
-      classification.metricResolution === METRIC_RESOLUTION.UNSUPPORTED
-      || isReportIntent(intent)
-    ));
+    || wantsDocumentEvidence(userMessage)
+    || (needsSql && entities.length > 0 && isReportIntent(intent));
 
   const visualization = Boolean(
     filters.wantsChart
@@ -147,7 +151,8 @@ export function planExecution(input = {}) {
     confidence: Number(classification.confidence) || 0,
     assumptions: input.assumptions || classification.assumptions || [],
     reason: capabilityPlan.reason || classification.source || null,
-    clarification: classification.clarification
+    clarification: clarify.clarification
+      || classification.clarification
       || (filters.needsPriorCompanies ? 'Which company should I use for this follow-up?' : null),
     filters: {
       ...filters,
@@ -190,9 +195,17 @@ function resolveMetrics(classification, filters) {
   return [];
 }
 
-function resolveYears(filters, memory) {
+function resolveYears(filters, memory, intent = null) {
   if (Array.isArray(filters.years) && filters.years.length) return filters.years;
   if (filters.year != null) return [filters.year];
+  // Discovery counts/lists must not inherit a prior metric-lookup year.
+  if (
+    intent === INTENTS.COUNT_COMPANIES
+    || intent === INTENTS.LIST_ALL_COMPANIES
+    || intent === INTENTS.FILTER_BY_SECTOR
+  ) {
+    return [];
+  }
   if (memory?.lastYear != null) return [memory.lastYear];
   return [];
 }
@@ -248,8 +261,120 @@ function selectExecutionStrategy({
   if (needsSql && needsReport) return 'hybrid';
   if (needsSql) return 'analytics';
   if (needsReport) return 'report';
-  if (intent === INTENTS.UNKNOWN) return 'llm_fallback';
-  return 'llm_fallback';
+  // Prefer one clear question over inventing via LLM when intent is weak
+  // and no capability engine already owns the turn.
+  if (intent === INTENTS.UNKNOWN) {
+    if (needsDocumentGeneration) return 'document';
+    if (needsCompliance) return 'compliance';
+    if (needsKnowledge) return 'knowledge';
+    if (needsGuidance) return 'guidance';
+    if (needsRecommendation) return 'recommendation';
+    return 'clarify';
+  }
+  return 'clarify';
+}
+
+/**
+ * Ask once when company/metric context is too weak — avoids wrong-door SQL/LLM answers.
+ */
+function resolveClarificationNeed({
+  classification,
+  memory,
+  intent,
+  entities,
+  metrics,
+  userMessage,
+  capabilityPlan = null,
+}) {
+  const filters = classification?.filters || {};
+  if (classification?.clarification || filters.needsPriorCompanies) {
+    return {
+      needsClarification: true,
+      clarification: classification.clarification
+        || 'Which company should I use for this follow-up?',
+    };
+  }
+
+  const caps = capabilityPlan?.capabilities || [];
+  const capabilityHandled = caps.some((c) => [
+    CAPABILITIES.DOCUMENT_GENERATION,
+    CAPABILITIES.ESG_KNOWLEDGE,
+    CAPABILITIES.ESG_GUIDANCE,
+    CAPABILITIES.ESG_COMPLIANCE,
+    CAPABILITIES.RECOMMENDATION,
+    CAPABILITIES.COMPANY_REPORTS,
+    CAPABILITIES.COMPANY_ANALYTICS,
+    CAPABILITIES.BENCHMARKING,
+  ].includes(c));
+
+  const conf = Number(classification?.confidence) || 0;
+  if (intent === INTENTS.UNKNOWN && conf < 0.55 && !capabilityHandled && !metrics.length) {
+    return {
+      needsClarification: true,
+      clarification:
+        'I want to answer accurately — are you looking for a company metric, a ranking, a definition, or how-to guidance?',
+    };
+  }
+
+  const memoryCompanies = [
+    ...(Array.isArray(memory?.lastCompanies) ? memory.lastCompanies : []),
+    ...(Array.isArray(memory?.lastEntities) ? memory.lastEntities : []),
+    ...(Array.isArray(memory?.entities) ? memory.entities : []),
+  ].filter(Boolean);
+  const companyCount = (entities?.length || 0) || memoryCompanies.length;
+
+  const needsCompany = [
+    INTENTS.METRIC_LOOKUP,
+    INTENTS.TREND_ANALYSIS,
+    INTENTS.COMPANY_SUMMARY,
+    INTENTS.REPORT_LOOKUP,
+  ].includes(intent);
+
+  if (needsCompany && companyCount === 0) {
+    return {
+      needsClarification: true,
+      clarification: 'Which company should I look up in the verified BRSR data?',
+    };
+  }
+
+  if (intent === INTENTS.COMPARE_COMPANIES) {
+    const text = String(userMessage || '');
+    const multiMetric = (metrics?.length || 0) >= 2
+      || /\bscope\s*1\b.*\bscope\s*2\b|\bscope\s*2\b.*\bscope\s*3\b/i.test(text);
+    const peerCompare = /\bpeers?\b|\bindustry\b|\bsector\b|\bbenchmark/i.test(text);
+    const compareCount = (entities?.length || 0) >= 2
+      ? entities.length
+      : (entities?.length || 0) + memoryCompanies.length;
+    // Same-company multi-metric or peer/benchmark asks are valid with one company.
+    if (compareCount < 2 && !(companyCount >= 1 && (multiMetric || peerCompare))) {
+      return {
+        needsClarification: true,
+        clarification: 'Which two companies should I compare on BRSR metrics?',
+      };
+    }
+  }
+
+  // Company-scoped metric ask with no resolved metric and no ranking cue → ask which metric.
+  const text = String(userMessage || '');
+  const looksMetric = /\b(emission|scope|carbon|ghg|water|waste|energy|renewable|diversity|ltifr|revenue)\b/i.test(text);
+  const rankingCue = /\b(top|bottom|highest|lowest|rank|leaderboard)\b/i.test(text);
+  if (
+    needsCompany
+    && companyCount > 0
+    && !metrics.length
+    && !classification?.metric
+    && looksMetric
+    && !rankingCue
+    && classification?.metricResolution === METRIC_RESOLUTION.NONE
+  ) {
+    return {
+      needsClarification: true,
+      clarification:
+        'Which metric should I use — for example Scope 1, Scope 2, renewable energy share, or water consumption?',
+    };
+  }
+
+  return { needsClarification: false, clarification: null };
 }
 
 /**

@@ -171,7 +171,7 @@ export async function runImperativePipeline({
   onProgress = null,
 } = {}) {
   const trace = createExecutionTrace({ userMessage, sessionId });
-  let state = stagePreprocess({ userMessage, chatHistory, sessionId, onProgress });
+  let state = await stagePreprocess({ userMessage, chatHistory, sessionId, onProgress });
   const elapsed = state.elapsed;
   let prevMs = 0;
   const phaseMs = () => {

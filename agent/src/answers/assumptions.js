@@ -50,11 +50,18 @@ export function collectAssumptions({
   return normalizeAssumptions(notes);
 }
 
+function isInternalFollowUpAssumption(text = '') {
+  return /using companies from prior context|follow-up resolved from prior context|follow-up metric ask reused|clarification will resolve companies/i.test(
+    String(text || ''),
+  );
+}
+
 /**
  * Prepend italic assumption notes to an answer body.
+ * Follow-up routing notes stay internal — they should not pad the user reply.
  */
 export function prependAssumptionNotes(text, assumptions = []) {
-  const notes = normalizeAssumptions(assumptions);
+  const notes = normalizeAssumptions(assumptions).filter((a) => !isInternalFollowUpAssumption(a));
   if (!notes.length) return text || '';
   const block = notes.map((a) => `*${a}*`).join(' ');
   if (!text) return block;

@@ -81,6 +81,23 @@ describe('entity precedence: chooseEntitiesByPrecedence', () => {
     assert.equal(decided.needsClarification, true);
   });
 
+  it('singular above company uses one prior name, not the full list', () => {
+    const decided = chooseEntitiesByPrecedence({
+      validatedCompanies: [],
+      candidates: [],
+      userMessage: 'what is the count of disabled female workers in above company',
+      memory: {
+        lastCompanies: [
+          'Aditya Birla Fashion and Retail Limited',
+          'Rainbow Childrens Medicare Limited',
+          'Aster DM Healthcare Limited',
+        ],
+        resolvedCompany: 'Aster DM Healthcare Limited',
+      },
+    });
+    assert.deepEqual(decided.companies, ['Aster DM Healthcare Limited']);
+  });
+
   it('never keeps unvalidated garbage on anaphoric turns (validatedCompanies=null)', () => {
     const decided = chooseEntitiesByPrecedence({
       validatedCompanies: null,

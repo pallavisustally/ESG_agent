@@ -335,11 +335,11 @@ document.addEventListener('DOMContentLoaded', () => {
         userAvatar.src = avatarUrl;
         userAvatar.alt = fallbackName;
         userAvatar.onerror = () => {
-          userAvatar.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(fallbackName)}&background=4285F4&color=fff&size=64`;
+          userAvatar.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(fallbackName)}&background=8e4dff&color=f5f6f9&size=64`;
         };
       }
       if (userAvatarLarge) {
-        userAvatarLarge.src = avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(fallbackName)}&background=4285F4&color=fff&size=80`;
+        userAvatarLarge.src = avatarUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(fallbackName)}&background=8e4dff&color=f5f6f9&size=80`;
         userAvatarLarge.alt = fallbackName;
       }
       if (userProfileName) {
@@ -381,24 +381,36 @@ document.addEventListener('DOMContentLoaded', () => {
     const toMigrate = guestSessions.length > 0 ? guestSessions : legacyLocal;
 
     if (toMigrate.length > 0) {
-      const migrateRes = await fetch('/api/sessions/migrate', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessions: toMigrate }),
-      });
-      const migrateData = await migrateRes.json();
-      if (migrateRes.ok && migrateData.success) {
-        sessions = migrateData.sessions || [];
-        persistSessionsLocally();
-      } else {
+      try {
+        const migrateRes = await fetch('/api/sessions/migrate', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessions: toMigrate }),
+        });
+        const migrateData = await migrateRes.json();
+        if (migrateRes.ok && migrateData.success) {
+          sessions = migrateData.sessions || [];
+          persistSessionsLocally();
+          clearGuestSessions();
+        } else {
+          await loadSessionsFromServer();
+          const guest = readGuestSessions();
+          if (guest.length) {
+            const byId = new Map(sessions.map((s) => [s.id, s]));
+            for (const g of guest) {
+              if (!byId.has(g.id)) sessions.unshift(g);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Guest session migrate failed:', err);
         await loadSessionsFromServer();
       }
     } else {
       await loadSessionsFromServer();
+      clearGuestSessions();
     }
-
-    clearGuestSessions();
     updateAuthUI();
     renderSessionList();
 
@@ -547,7 +559,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function persistSessionToServer(session) {
-    if (!currentUser || !session) return;
+    if (!session) return;
 
     await fetch('/api/sessions', {
       method: 'POST',
@@ -671,13 +683,27 @@ document.addEventListener('DOMContentLoaded', () => {
       item.setAttribute('data-session-id', session.id);
       item.innerHTML = `
         <span class="chat-history-title" title="${escapeHtml(session.title)}">${escapeHtml(session.title)}</span>
-        <span class="chat-history-delete" title="Delete" role="button"><i data-lucide="x"></i></span>
+        <span class="chat-history-actions">
+          <span class="chat-history-rename" title="Rename" role="button"><i data-lucide="pencil"></i></span>
+          <span class="chat-history-delete" title="Delete" role="button"><i data-lucide="x"></i></span>
+        </span>
       `;
 
       // Click to load session
       item.addEventListener('click', (e) => {
-        if (e.target.closest('.chat-history-delete')) return;
+        if (e.target.closest('.chat-history-delete') || e.target.closest('.chat-history-rename')) return;
         loadSession(session.id);
+      });
+
+      const renameBtn = item.querySelector('.chat-history-rename');
+      renameBtn?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const next = window.prompt('Rename chat', session.title || '');
+        if (next == null) return;
+        const title = String(next).trim();
+        if (!title || title === session.title) return;
+        await renameSession(session.id, title);
       });
 
       // Delete session
@@ -703,13 +729,20 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Save/Update Session (guest: localStorage; signed-in: localStorage + server)
+  function newSessionId() {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return `session_${crypto.randomUUID()}`;
+    }
+    return `session_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  }
+
   function saveCurrentSession() {
     if (chatHistory.length === 0) return;
 
     let sessionToPersist = null;
 
     if (!currentSessionId) {
-      currentSessionId = 'session_' + Date.now();
+      currentSessionId = newSessionId();
       const firstUserMsg = chatHistory.find(m => m.role === 'user');
       let title = 'New Sustainability Analysis';
       if (firstUserMsg) {
@@ -740,7 +773,7 @@ document.addEventListener('DOMContentLoaded', () => {
     persistSessionsLocally();
     renderSessionList();
 
-    if (isSignedIn() && sessionToPersist) {
+    if (sessionToPersist) {
       persistSessionToServer(sessionToPersist).catch((err) => {
         console.warn('Failed to save session to server:', err);
       });
@@ -781,19 +814,39 @@ document.addEventListener('DOMContentLoaded', () => {
     sessions = sessions.filter(s => s.id !== id);
     persistSessionsLocally();
 
-    if (isSignedIn()) {
-      fetch(`/api/sessions/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      }).catch((err) => {
-        console.warn('Failed to delete session on server:', err);
-      });
-    }
+    fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    }).catch((err) => {
+      console.warn('Failed to delete session on server:', err);
+    });
 
     if (currentSessionId === id) {
       startNewChat();
     } else {
       renderSessionList();
+    }
+  }
+
+  async function renameSession(id, title) {
+    const idx = sessions.findIndex((s) => s.id === id);
+    if (idx === -1) return;
+    sessions[idx].title = title;
+    sessions[idx].timestamp = Date.now();
+    persistSessionsLocally();
+    renderSessionList();
+    try {
+      const res = await fetch(`/api/sessions/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title }),
+      });
+      if (!res.ok) {
+        persistSessionToServer(sessions[idx]).catch(() => {});
+      }
+    } catch (err) {
+      console.warn('Failed to rename session on server:', err);
     }
   }
 
@@ -1019,16 +1072,16 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // Reports Management Modal Controls
-  viewReportsBtn.addEventListener('click', () => {
-    reportsModal.classList.remove('hidden');
+  viewReportsBtn?.addEventListener('click', () => {
+    reportsModal?.classList.remove('hidden');
     fetchStatus();
   });
 
-  closeReportsModalBtn.addEventListener('click', () => {
-    reportsModal.classList.add('hidden');
+  closeReportsModalBtn?.addEventListener('click', () => {
+    reportsModal?.classList.add('hidden');
   });
 
-  reportsModal.addEventListener('click', (e) => {
+  reportsModal?.addEventListener('click', (e) => {
     if (e.target === reportsModal) {
       reportsModal.classList.add('hidden');
     }
@@ -1041,8 +1094,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const data = await response.json();
 
       if (data.success) {
-        reportsCountText.textContent = data.reportsCount;
-        renderReportsTable(data.reports);
+        if (reportsCountText) reportsCountText.textContent = data.reportsCount;
+        if (reportsTableBody) renderReportsTable(data.reports);
       }
     } catch (error) {
       console.error('Error fetching database status:', error);
@@ -1051,7 +1104,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Render modal reports database table
   function renderReportsTable(reports) {
-    if (reports.length === 0) {
+    if (!reportsTableBody) return;
+    if (!reports || reports.length === 0) {
       reportsTableBody.innerHTML = `
         <tr>
           <td colspan="4" class="empty-state" style="padding: 40px 0;">
@@ -1125,7 +1179,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const welcome = document.createElement('div');
     welcome.className = 'chat-welcome';
     welcome.innerHTML = `
-      <div class="welcome-gemini-icon"><span class="gemini-gradient">✦</span></div>
+      <div class="welcome-brand" aria-hidden="true"></div>
       <h1 class="welcome-greeting">Hello</h1>
       <p class="welcome-sub">Ask anything about BRSR &amp; ESG sustainability data</p>
       <div class="quick-prompts-grid">
@@ -1178,7 +1232,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const avatar = document.createElement('div');
     avatar.className = 'msg-avatar';
-    avatar.innerHTML = `<i data-lucide="${role === 'user' ? 'user' : 'sparkles'}"></i>`;
+    avatar.innerHTML = role === 'user'
+      ? `<i data-lucide="user"></i>`
+      : `<span class="brand-mark" aria-hidden="true"></span>`;
 
     const bubble = document.createElement('div');
     bubble.className = 'msg-bubble';
@@ -1506,19 +1562,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const indexAxis = normalized.indexAxis === 'y' ? 'y' : 'x';
 
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-    const gridColor = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(60,64,67,0.08)';
-    const tickColor = isDark ? '#9aa0a6' : '#70757a';
-    const legendColor = isDark ? '#e3e3e3' : '#1f1f1f';
+    const gridColor = isDark ? 'rgba(236,239,248,0.08)' : 'rgba(29,26,34,0.08)';
+    const tickColor = isDark ? '#a7a7a7' : '#6d6d6d';
+    const legendColor = isDark ? '#eceff8' : '#1d1a22';
 
     const palette = [
-      { fill: 'rgba(66, 133, 244, 0.75)', border: '#4285f4' },
-      { fill: 'rgba(155, 114, 203, 0.75)', border: '#9b72cb' },
-      { fill: 'rgba(217, 101, 112, 0.75)', border: '#d96570' },
-      { fill: 'rgba(52, 168, 83, 0.75)', border: '#34a853' },
-      { fill: 'rgba(251, 188, 4, 0.75)', border: '#fbbc04' },
-      { fill: 'rgba(255, 109, 1, 0.75)', border: '#ff6d01' },
-      { fill: 'rgba(24, 128, 128, 0.75)', border: '#188080' },
-      { fill: 'rgba(234, 67, 53, 0.75)', border: '#ea4335' },
+      { fill: 'rgba(142, 77, 255, 0.78)', border: '#8e4dff' },
+      { fill: 'rgba(166, 121, 244, 0.78)', border: '#a679f4' },
+      { fill: 'rgba(95, 10, 135, 0.78)', border: '#5f0a87' },
+      { fill: 'rgba(73, 39, 77, 0.78)', border: '#49274d' },
+      { fill: 'rgba(80, 22, 63, 0.78)', border: '#50163f' },
+      { fill: 'rgba(109, 191, 138, 0.75)', border: '#6dbf8a' },
+      { fill: 'rgba(201, 162, 39, 0.75)', border: '#c9a227' },
+      { fill: 'rgba(117, 38, 38, 0.75)', border: '#752626' },
     ];
 
     const datasets = normalized.datasets.map((ds, idx) => {

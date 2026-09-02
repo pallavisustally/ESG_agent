@@ -184,7 +184,7 @@ describe('document fallback config aliases', () => {
     else process.env.MAX_DOCUMENT_FALLBACK_COMPANIES = prevB;
   });
 
-  it('allows unsupported COMPARE for company-scoped fallback', () => {
+  it('skips unsupported COMPARE PDF fallback unless the user asks for the filing', () => {
     process.env.SQL_DOCUMENT_FALLBACK = 'true';
     assert.equal(
       isCompanyScopedDocumentFallbackEligible({
@@ -195,6 +195,18 @@ describe('document fallback config aliases', () => {
         },
         companies: ['A', 'B'],
         userMessage: 'plastic footprint for the above companies',
+      }),
+      false,
+    );
+    assert.equal(
+      isCompanyScopedDocumentFallbackEligible({
+        classification: {
+          intent: INTENTS.COMPARE_COMPANIES,
+          metricResolution: METRIC_RESOLUTION.UNSUPPORTED,
+          filters: { unsupportedMetric: true },
+        },
+        companies: ['A', 'B'],
+        userMessage: 'plastic footprint for the above companies from the BRSR PDF',
       }),
       true,
     );

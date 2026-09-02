@@ -42,6 +42,7 @@ import { ERROR_CODES } from '../errors/agent-errors.js';
 import { logPipelineStage } from '../observability/agent-logger.js';
 import { shouldOmitFromComposition } from '../ops/soft-fail.js';
 import { saveTurnMemory } from '../pipeline/pipeline-helpers.js';
+import { wantsDocumentEvidence } from '../answers/no-data-template.js';
 
 const DEFAULT_ENGINE_TIMEOUT_MS = Number(process.env.EXECUTION_ENGINE_TIMEOUT_MS || 45000);
 
@@ -161,13 +162,21 @@ export async function executeExecutionPlan(ctx = {}) {
     const result = await runEngineWithTimeout(engine, shared, timeoutMs, 'sequential', idx);
     results.push(result);
     if (engine === EXECUTION_ENGINES.ANALYTICS) {
-      if (result.ok && result.dataText) {
+      const noData = Boolean(result.data?.noData) || result.error === 'metric_not_in_sql';
+      if (result.ok && result.dataText && !noData) {
         shared.priorDataText = appendData(shared.priorDataText, result.dataText);
         shared.analyticsData = result.data;
       } else {
         shared.analyticsFailed = true;
-        // Auto document fallback when SQL miss and companies known
-        if (executionPlan.entities?.length && !engines.includes(EXECUTION_ENGINES.REPORT)) {
+        if (result.data) shared.analyticsData = result.data;
+        const namedCompanies = (executionPlan.entities || []).filter(Boolean);
+        const allowDocFallback = wantsDocumentEvidence(ctx.userMessage || '', executionPlan)
+          || Boolean(executionPlan.needsPdf || executionPlan.needsReport);
+        if (
+          allowDocFallback
+          && namedCompanies.length
+          && !engines.includes(EXECUTION_ENGINES.REPORT)
+        ) {
           const fbIdx = orderIndex;
           orderIndex += 1;
           const reportResult = await runEngineWithTimeout(
@@ -177,10 +186,19 @@ export async function executeExecutionPlan(ctx = {}) {
             'fallback',
             fbIdx,
           );
-          if (reportResult.ok) {
+          if (reportResult.ok && String(reportResult.text || '').trim()) {
             results.push(reportResult);
             shared.priorDataText = appendData(shared.priorDataText, reportResult.dataText);
-          } else {
+            const analyticsIdx = results.length - 2;
+            if (analyticsIdx >= 0 && results[analyticsIdx]?.engine === EXECUTION_ENGINES.ANALYTICS) {
+              results[analyticsIdx] = {
+                ...results[analyticsIdx],
+                softOmitted: true,
+                text: '',
+                dataText: '',
+              };
+            }
+          } else if (reportResult) {
             results.push(reportResult);
           }
         }

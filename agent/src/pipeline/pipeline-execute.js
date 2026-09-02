@@ -6,7 +6,6 @@
 import { INTENTS } from '../intent/classify-intent.js';
 import {
   METRIC_RESOLUTION,
-  UNSUPPORTED_METRIC_RESPONSE,
   shouldReuseMemoryMetric,
 } from '../intent/metric-resolution.js';
 import { resumeClassificationFromPending } from '../intent/pending-request.js';
@@ -25,6 +24,7 @@ import {
   shouldBlockLlmFallback,
   isAllowedLlmHandoff,
 } from '../answers/sql-failure.js';
+import { buildNoDataAnswer } from '../answers/no-data-template.js';
 import { planQuery } from '../planner/plan-query.js';
 import {
   shouldUseCapabilityExecutor,
@@ -71,7 +71,7 @@ async function maybeDocumentFallback(state, {
     planValidation,
   } = state;
 
-  const companies = resolveFallbackCompanies(classification, memory, sqlResult?.data);
+  const companies = resolveFallbackCompanies(classification, memory, sqlResult?.data, userMessage);
   if (!isCompanyScopedDocumentFallbackEligible({
     classification,
     plan,
@@ -230,7 +230,12 @@ export async function executeRoutedBranches(state) {
       return docFallback;
     }
 
-    const text = clarification || UNSUPPORTED_METRIC_RESPONSE;
+    const text = buildNoDataAnswer({
+      companies: classification.entities,
+      metric: classification.metric,
+      year: classification.filters?.years?.[0],
+      userMessage: state.userMessage,
+    });
     // Preserve prior metric/plan in memory — this turn did not produce a new verified result.
     memory = updateMemory(key, {
       lastIntent: classification.intent,
@@ -687,14 +692,22 @@ export async function executeRoutedBranches(state) {
     }
 
     if (shouldBlockLlmFallback(classification.intent, sqlResult)) {
-      const text = explainSqlFailure({
-        intent: classification.intent,
-        error: sqlResult.error,
-        metric: classification.metric || classification.filters?.metric || plan.metric,
-        companies: classification.entities,
-        year: classification.filters?.years?.[0],
-        sector: classification.filters?.sector,
-      });
+      const text = sqlResult.error === 'metric_not_in_sql'
+        ? buildNoDataAnswer({
+          companies: classification.entities,
+          metric: classification.metric || classification.filters?.metric || plan.metric,
+          year: classification.filters?.years?.[0],
+          userMessage: state.userMessage,
+        })
+        : explainSqlFailure({
+          intent: classification.intent,
+          error: sqlResult.error,
+          metric: classification.metric || classification.filters?.metric || plan.metric,
+          companies: classification.entities,
+          year: classification.filters?.years?.[0],
+          sector: classification.filters?.sector,
+          userMessage: state.userMessage,
+        });
       logAgentEvent({
         stage: 'sql_failure_explained',
         intent: classification.intent,
@@ -743,6 +756,7 @@ export async function executeRoutedBranches(state) {
         companies: classification.entities,
         year: classification.filters?.years?.[0],
         sector: classification.filters?.sector,
+        userMessage: state.userMessage,
       });
       logAgentEvent({
         stage: 'sql_failure_explained',

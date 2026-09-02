@@ -283,8 +283,6 @@ export const REGISTRY = [
       '',
       'It organizes disclosures under nine principles (NGRBC), with essential and leadership indicators spanning ethics, products, employees, stakeholders, human rights, environment, policy advocacy, inclusive growth, and consumers.',
       '',
-      'This Copilot answers company questions from indexed BRSR structured fields and report text.',
-      '',
       '**Related frameworks:** thematic overlap with **GRI** topics and **ISSB**/TCFD climate pillars; BRSR remains the India filing format.',
     ].join('\n'),
     related: ['ngrbc', 'gri', 'issb', 'eid'],
@@ -307,10 +305,6 @@ export const REGISTRY = [
       '- **Environmental** — Scope 1/2/3 emissions, renewable energy share, water consumption, waste generated',
       '- **Social** — female employee share, board diversity, safety (LTIFR), total employees',
       '- **Governance / economic** — board composition indicators, revenue (when used alongside ESG analysis)',
-      '',
-      'This Copilot can look up reported metric **values** when you name a company (and optionally a year), e.g. “What are Infosys Scope 1 emissions in 2024?”',
-      '',
-      'Ask “What is Scope 1?” if you want a definition of a specific metric.',
     ].join('\n'),
   },
   {
@@ -524,8 +518,6 @@ export const REGISTRY = [
       '- Fuel burned in boilers, furnaces, and company vehicles',
       '- Process emissions from manufacturing',
       '- Fugitive emissions (e.g. refrigerants)',
-      '',
-      'In this agent, company Scope 1 values come from structured BRSR fields (SQL), not from a dictionary definition.',
     ].join('\n'),
     related: ['scope-2', 'scope-3'],
   },
@@ -540,8 +532,6 @@ export const REGISTRY = [
       '**Scope 2** emissions are **indirect GHG emissions** from purchased electricity, steam, heating, or cooling.',
       '',
       'Companies often reduce Scope 2 by increasing renewable power (on-site or via PPAs) and improving energy efficiency.',
-      '',
-      'Ask for a company name if you want the reported Scope 2 figure from BRSR data.',
     ].join('\n'),
     related: ['scope-1', 'scope-3', 'renewable-energy'],
   },
@@ -559,10 +549,6 @@ export const REGISTRY = [
       '- **Scope 1** — direct emissions from owned/controlled sources',
       '- **Scope 2** — emissions from purchased energy',
       '- **Scope 3** — other indirect value-chain emissions',
-      '',
-      '**Total emissions** in this database often means a Scope 1+2+3 (or best available) proxy for ranking and lookup.',
-      '',
-      'This answer is a definition. To see **reported numbers**, ask e.g. “What are Infosys Scope 1 emissions in 2024?”',
     ].join('\n'),
     related: ['scope-1', 'scope-2', 'scope-3'],
   },
@@ -580,7 +566,7 @@ export const REGISTRY = [
       '- **S** — workforce, diversity, safety, community, human rights',
       '- **G** — board composition, ethics, transparency, compliance',
       '',
-      'In India, listed companies disclose much of this through **BRSR** (Business Responsibility and Sustainability Report) filings, which this agent queries.',
+      'In India, listed companies disclose much of this through **BRSR** (Business Responsibility and Sustainability Report) filings.',
     ].join('\n'),
     related: ['brsr'],
   },
@@ -595,8 +581,6 @@ export const REGISTRY = [
       '**Renewable energy** in BRSR typically refers to electricity or energy from solar, wind, hydro, biomass, and similar sources.',
       '',
       'Companies often report renewable consumption and **renewable energy share** (renewables as a % of total energy).',
-      '',
-      'Ask for a company if you want the reported share or consumption value.',
     ].join('\n'),
     related: ['scope-2'],
   },
@@ -648,20 +632,20 @@ export function formatCitationsBlock(entry) {
 }
 
 export function formatRegistryAnswer(entry, {
-  footer = '_ESG knowledge answer — general concept explanation, not a company database lookup._',
+  footer = '',
   includeRelated = true,
   includeCitations = true,
 } = {}) {
   if (!entry) return '';
   const related = includeRelated ? formatRelatedBlock(entry) : '';
   const cites = includeCitations ? formatCitationsBlock(entry) : '';
-  return [
+  const parts = [
     `### ${entry.title}`,
     '',
     entry.body + related + cites,
-    '',
-    footer,
-  ].join('\n');
+  ];
+  if (footer) parts.push('', footer);
+  return parts.join('\n');
 }
 
 /** Framework aliases useful for compliance routing detectors. */

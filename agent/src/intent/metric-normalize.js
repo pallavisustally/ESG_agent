@@ -15,6 +15,10 @@ const QUERY_TYPO_FIXES = [
   [/\brenewables\b/gi, 'renewable'],
   [/\bwatter\b/gi, 'water'],
   [/\bwastee\b/gi, 'waste'],
+  // employee / employees misspellings (employes, emplyees, employe, …)
+  [/\bemployes\b/gi, 'employees'],
+  [/\bemplyees?\b/gi, 'employees'],
+  [/\bemploye\b/gi, 'employee'],
   [/\bemployeees\b/gi, 'employees'],
   [/\bstrenght\b/gi, 'strength'],
 ];

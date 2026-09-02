@@ -61,6 +61,15 @@ function escapeLike(value) {
   return String(value).replace(/'/g, "''");
 }
 
+function uniqueMetrics(list = []) {
+  const out = [];
+  for (const m of list) {
+    const id = String(m || '').trim();
+    if (id && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
 function metricSelectExpr(metric) {
   if (metric === 'total_emissions') {
     return '(COALESCE(scope1_emissions,0)+COALESCE(scope2_emissions,0)+COALESCE(scope3_emissions,0))';
@@ -94,6 +103,34 @@ async function companiesBySector(sector) {
 async function uniqueCompanyList() {
   const companies = await getCompanyList();
   return dedupeCompanyNames(companies).sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Distinct companies with BRSR rows, optionally filtered by sector and/or year.
+ */
+async function companiesWithReports({ sector = null, year = null } = {}) {
+  if (!year && !sector) {
+    return uniqueCompanyList();
+  }
+  if (!year && sector) {
+    return companiesBySector(sector);
+  }
+
+  const db = await getDb();
+  const where = ['year = ?'];
+  const params = [year];
+  if (sector) {
+    where.push('lower(COALESCE(sector,\'\')) = lower(?)');
+    params.push(sector);
+  }
+  const rows = await db.all(
+    `SELECT DISTINCT company FROM reports
+     WHERE ${where.join(' AND ')}
+     ORDER BY company`,
+    params,
+  );
+  return dedupeCompanyNames(rows.map((r) => r.company).filter(Boolean))
+    .sort((a, b) => a.localeCompare(b));
 }
 
 async function sectorBreakdown() {
@@ -227,14 +264,39 @@ export async function runSqlAgent({ plan, classification, memory = null }) {
 
   try {
     if (intent === INTENTS.COUNT_COMPANIES) {
-      const companies = sector ? await companiesBySector(sector) : await uniqueCompanyList();
-      const scope = sector ? ` in **${sector}**` : '';
-      const text = `There are **${companies.length}** companies${scope} with indexed BRSR reports.`;
+      const planYear = plan?.years?.[0] ?? null;
+      const countYear = year || planYear || null;
+      const companies = await companiesWithReports({ sector, year: countYear });
+      const scopeParts = [
+        sector ? `in **${sector}**` : null,
+        countYear ? `for **${countYear}**` : null,
+      ].filter(Boolean);
+      const scope = scopeParts.length ? ` ${scopeParts.join(' ')}` : '';
+      const text = countYear
+        ? `There are **${companies.length}** companies${scope} with indexed BRSR reports.`
+        : `There are **${companies.length}** companies${scope} with indexed BRSR reports.`;
       return {
         ok: true,
         text,
-        data: { total: companies.length, sector },
-        memoryUpdate: { lastIntent: intent, filters, awaitingMore: false },
+        data: { total: companies.length, sector, year: countYear },
+        // Clear prior company/metric so year-only follow-ups ("in 2024") stay on COUNT,
+        // not a leftover TCS employee lookup from earlier in the session.
+        memoryUpdate: {
+          lastIntent: intent,
+          canonicalIntent: 'COUNT',
+          lastCompanies: [],
+          entities: [],
+          lastPageItems: [],
+          lastMetric: null,
+          comparisonContext: null,
+          replaceFilters: true,
+          filters: {
+            ...(countYear ? { years: [countYear] } : {}),
+            ...(sector ? { sector } : {}),
+          },
+          lastYear: countYear,
+          awaitingMore: false,
+        },
       };
     }
 
@@ -319,15 +381,15 @@ export async function runSqlAgent({ plan, classification, memory = null }) {
         };
       }
       const metricLabel = metric === 'total_emissions'
-        ? 'total GHG emissions (Scope 1+2+3)'
-        : metric;
+        ? 'total GHG emissions (Scope 1+2+3, tCO2e)'
+        : `${metric}${isEmissionRankMetric(metric) ? ' (tCO2e)' : ''}`;
       const rankYear = result.year || year;
       const lines = result.rows.map(
         (r, i) => `${i + 1}. **${r.company}** (${r.year}): ${Number(r.metric_value).toLocaleString('en-IN')}${r.sector ? ` — ${r.sector}` : ''}`,
       );
       const unitNote = isEmissionRankMetric(metric)
-        ? '_Values are normalized to tCO2e from BRSR Scope fields (kg/Mt labels corrected; implausible light-sector / parse outliers excluded)._'
-        : '_Values are from the structured BRSR `reports` table (Scope 1+2+3 sum when ranking carbon/GHG)._';
+        ? '_Values are normalized to tCO2e from BRSR Scope fields (kg/Mt labels corrected; implausible light-sector / parse outliers excluded). Issuer duplicates collapsed._'
+        : '_Values are from the structured BRSR `reports` table (Scope 1+2+3 sum when ranking carbon/GHG). Issuer duplicates collapsed._';
       const summary = [
         `### Top ${result.rows.length} by ${metricLabel}${rankYear ? ` (${rankYear})` : ''}`,
         '',
@@ -513,6 +575,60 @@ export async function runSqlAgent({ plan, classification, memory = null }) {
         && metric
         && (RANK_METRICS.has(metric) || getDerivedMetric(metric) || metric === 'total_emissions')
       ) {
+        const metricList = uniqueMetrics([
+          ...(Array.isArray(classification?.metrics) ? classification.metrics : []),
+          ...(Array.isArray(filters?.metrics) ? filters.metrics : []),
+          ...(Array.isArray(plan?.metrics) ? plan.metrics : []),
+          metric,
+        ]).filter((m) => RANK_METRICS.has(m) || getDerivedMetric(m) || m === 'total_emissions');
+
+        // Multi-metric company ask (e.g. male + female employee counts).
+        if (metricList.length > 1) {
+          const lines = [`### ${resolved.company}${year ? ` (${year})` : ''}`, ''];
+          const values = {};
+          let usedYear = year;
+          for (const m of metricList.slice(0, 4)) {
+            const lookup = await lookupCompanyMetricRow({
+              company: resolved.company,
+              metric: m,
+              year,
+            });
+            if (lookup.row && lookup.value != null && !Number.isNaN(Number(lookup.value))) {
+              const label = m === 'total_emissions'
+                ? 'total GHG emissions (Scope 1+2+3)'
+                : (getDerivedMetric(m)?.label || m.replace(/_/g, ' '));
+              values[m] = Number(lookup.value);
+              usedYear = lookup.row.year || usedYear;
+              lines.push(`- **${label}**: **${Number(lookup.value).toLocaleString('en-IN', { maximumFractionDigits: 4 })}**`);
+            } else {
+              const label = m.replace(/_/g, ' ');
+              lines.push(`- **${label}**: not available in structured BRSR for this company/year`);
+            }
+          }
+          if (Object.keys(values).length) {
+            lines.push('', '_Values from the structured BRSR `reports` table._');
+            return {
+              ok: true,
+              text: lines.join('\n'),
+              data: {
+                resolvedCompany: resolved.company,
+                year: usedYear || null,
+                metrics: metricList,
+                values,
+              },
+              memoryUpdate: {
+                lastIntent: intent,
+                filters,
+                resolvedCompany: resolved.company,
+                lastMetric: metricList[0],
+                lastYear: usedYear || year || null,
+                lastCompanies: [resolved.company],
+                lastTool: 'SQL',
+              },
+            };
+          }
+        }
+
         const lookup = await lookupCompanyMetricRow({
           company: resolved.company,
           metric,

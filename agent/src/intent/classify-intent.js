@@ -258,6 +258,41 @@ function wantsAllRecords(text) {
     || /\btotal company names\b/i.test(text);
 }
 
+/** Fix common “companies” / “how many” typos before count/list detection. */
+export function normalizeCompanyCountText(text = '') {
+  return String(text || '')
+    .replace(/\bhow\s+man\b/gi, 'how many')
+    .replace(/\b(comanies|comanie|comannis|comanys|companis|campanies|compaines|companeis|comapnies|comannies|compnaies|compnies|companys|comapanies|companes|comapany)\b/gi, 'companies')
+    // Fuzzy leftover misspellings of "companies" (com…nies / com…ny)
+    .replace(/\bcom[a-z]{0,4}n(?:ie|ei|ee|y)s?\b/gi, 'companies');
+}
+
+/**
+ * True when the user is asking how many companies exist / have BRSR filings —
+ * not a workforce headcount and not a prior-company metric follow-up.
+ */
+export function looksLikeCompanyCountAsk(text = '') {
+  const t = normalizeCompanyCountText(text);
+  if (/\b(male|female|women|men|employee|employe|worker|workforce|staff|scope\s*[123]|emission)\b/i.test(t)) {
+    return false;
+  }
+  // Allow missing leading "h": "ow many companies…"
+  if (/\b(?:h)?ow\s+man(?:y)?\s+companies\b/i.test(t)) return true;
+  if (/\b(?:h)?ow\s+man(?:y)?\s+com\w{2,12}\b/i.test(t)) return true;
+  if (/\b(count|number|total)\s+(of\s+)?companies\b/i.test(t)) return true;
+  if (/\bcompanies\b.{0,48}\b(hold|have|with|filed|filing)\b.{0,40}\bbrsr\b/i.test(t)) return true;
+  if (/\bcom\w{2,12}\b.{0,48}\b(hold|have|with|filed|filing)\b.{0,40}\bbrsr\b/i.test(t)) return true;
+  if (/\b(?:h)?ow\s+many\b.{0,24}\bcompanies\b.{0,40}\b(brsr|report)/i.test(t)) return true;
+  if (
+    /\b(?:(?:h)?ow\s+man(?:y)?|count|number)\b/i.test(t)
+    && /\bcompan/i.test(t)
+    && /\b(in|for|year)\b.{0,12}\b20\d{2}\b/i.test(t)
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function isFollowUpPagination(text, memory = null) {
   const t = String(text).trim().toLowerCase();
   if (/^(next|more|continue|show more|next page|previous|prev|page\s*\d+)$/i.test(t)) return true;
@@ -748,11 +783,24 @@ export function classifyIntent(userMessage, memory = null, opts = {}) {
     });
   }
 
-  // Count
-  if (/\bhow many companies\b|\bcount (of )?companies\b|\bnumber of companies\b|\btotal (number of )?companies\b/i.test(text)
+  // Count (typo-tolerant: comannies → companies; “hold/have BRSR reports”)
+  {
+    const countText = normalizeCompanyCountText(text);
+    if (
+      looksLikeCompanyCountAsk(countText)
       && !wantsAll
-      && !isRankingQuestion(text, metric)) {
-    return stamp({ intent: INTENTS.COUNT_COMPANIES, entities, filters, confidence: 0.96, wantsAll: false, metric, source: 'rules' });
+      && !isRankingQuestion(countText, metric)
+    ) {
+      return stamp({
+        intent: INTENTS.COUNT_COMPANIES,
+        entities: [],
+        filters,
+        confidence: 0.96,
+        wantsAll: false,
+        metric: null,
+        source: 'rules',
+      });
+    }
   }
 
   // Sector / industry aggregate analytics — company entities NOT required.

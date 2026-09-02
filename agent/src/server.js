@@ -19,9 +19,17 @@ import {
   findOrCreateUser,
   getUserChatSessions,
   upsertUserChatSession,
+  upsertChatSession,
   deleteUserChatSession,
   migrateUserChatSessions,
+  persistChatTurn,
+  renameChatSession,
 } from './user-chats.js';
+import {
+  getMemory,
+  memoryKeyFromRequest,
+} from './memory/conversation-memory.js';
+import { extractAnswerCitations } from './answers/citations.js';
 
 // Load environment variables
 dotenv.config();
@@ -348,22 +356,51 @@ app.get('/api/sessions', requireAuth, async (req, res) => {
   }
 });
 
-// API: Create or update a chat session
-app.post('/api/sessions', requireAuth, async (req, res) => {
+// API: Create or update a chat session (signed-in or guest)
+app.post('/api/sessions', async (req, res) => {
   try {
-    const { id, title, history, timestamp } = req.body;
+    const user = await getUserFromRequest(req);
+    const { id, title, history, timestamp, memory } = req.body;
     if (!id || !Array.isArray(history)) {
       return res.status(400).json({ success: false, error: 'Session id and history are required.' });
     }
 
-    await upsertUserChatSession(req.user.id, {
-      id,
-      title: title || 'New Sustainability Analysis',
-      history,
-      timestamp: timestamp || Date.now(),
-    });
+    if (user) {
+      await upsertUserChatSession(user.id, {
+        id,
+        title: title || 'New Sustainability Analysis',
+        history,
+        memory: memory || null,
+        timestamp: timestamp || Date.now(),
+      });
+    } else {
+      await upsertChatSession(null, {
+        id,
+        title: title || 'New Sustainability Analysis',
+        history,
+        memory: memory || null,
+        timestamp: timestamp || Date.now(),
+      });
+    }
 
     res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.patch('/api/sessions/:id', async (req, res) => {
+  try {
+    const user = await getUserFromRequest(req);
+    const title = String(req.body?.title || '').trim();
+    if (!title) {
+      return res.status(400).json({ success: false, error: 'Title is required.' });
+    }
+    const renamed = await renameChatSession(user?.id ?? null, req.params.id, title);
+    if (!renamed) {
+      return res.status(404).json({ success: false, error: 'Session not found.' });
+    }
+    res.json({ success: true, title });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -381,9 +418,10 @@ app.post('/api/sessions/migrate', requireAuth, async (req, res) => {
 });
 
 // API: Delete a chat session
-app.delete('/api/sessions/:id', requireAuth, async (req, res) => {
+app.delete('/api/sessions/:id', async (req, res) => {
   try {
-    const deleted = await deleteUserChatSession(req.user.id, req.params.id);
+    const user = await getUserFromRequest(req);
+    const deleted = await deleteUserChatSession(user?.id ?? null, req.params.id);
     if (!deleted) {
       return res.status(404).json({ success: false, error: 'Session not found.' });
     }
@@ -567,6 +605,37 @@ app.post('/api/chat', async (req, res) => {
         sendEvent(progress);
       }
     });
+
+    if (sessionId && result?.text) {
+      try {
+        const user = await getUserFromRequest(req);
+        const memory = getMemory(memoryKeyFromRequest({
+          sessionId,
+          chatHistory,
+          userMessage: message,
+        }));
+        const citations = extractAnswerCitations(result.text);
+        const history = Array.isArray(result.chatHistory) && result.chatHistory.length
+          ? result.chatHistory.map((m, idx, arr) => (
+            idx === arr.length - 1 && m.role === 'assistant' && citations.length
+              ? { ...m, citations }
+              : m
+          ))
+          : [
+            ...chatHistory,
+            { role: 'user', content: message },
+            { role: 'assistant', content: result.text, citations },
+          ];
+        await persistChatTurn({
+          sessionId,
+          userId: user?.id ?? null,
+          history,
+          memory,
+        });
+      } catch (persistErr) {
+        console.warn('[api/chat] session persist failed:', persistErr?.message || persistErr);
+      }
+    }
 
     sendEvent({
       status: 'done',

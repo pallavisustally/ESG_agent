@@ -102,9 +102,10 @@ async function ensurePostgresSchema(pg) {
   await pg.exec(`
     CREATE TABLE IF NOT EXISTS chat_sessions (
       id TEXT PRIMARY KEY,
-      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
       title TEXT NOT NULL,
       history_json TEXT NOT NULL,
+      memory_json TEXT,
       updated_at BIGINT NOT NULL,
       ${createdAt}
     )
@@ -227,25 +228,32 @@ async function migrateUsersAndChats(sqlite, pg) {
   let chats = [];
   try {
     chats = await sqlite.all(
-      'SELECT id, user_id, title, history_json, updated_at FROM chat_sessions',
+      'SELECT id, user_id, title, history_json, memory_json, updated_at FROM chat_sessions',
     );
   } catch {
-    return { users: users.length, chats: 0 };
+    try {
+      chats = await sqlite.all(
+        'SELECT id, user_id, title, history_json, updated_at FROM chat_sessions',
+      );
+    } catch {
+      return { users: users.length, chats: 0 };
+    }
   }
 
   console.log(`Chat sessions in SQLite: ${chats.length}`);
   for (const s of chats) {
-    const newUserId = idMap.get(s.user_id);
-    if (!newUserId) continue;
+    const newUserId = s.user_id == null ? null : idMap.get(s.user_id);
+    if (s.user_id != null && !newUserId) continue;
     await pg.run(
-      `INSERT INTO chat_sessions (id, user_id, title, history_json, updated_at)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO chat_sessions (id, user_id, title, history_json, memory_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT (id) DO UPDATE SET
          title = EXCLUDED.title,
          history_json = EXCLUDED.history_json,
+         memory_json = COALESCE(EXCLUDED.memory_json, chat_sessions.memory_json),
          updated_at = EXCLUDED.updated_at,
          user_id = EXCLUDED.user_id`,
-      [s.id, newUserId, s.title, s.history_json, s.updated_at],
+      [s.id, newUserId, s.title, s.history_json, s.memory_json || null, s.updated_at],
     );
   }
 
